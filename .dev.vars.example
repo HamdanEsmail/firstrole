@@ -1,0 +1,16 @@
+# Copy to .dev.vars for local development. Never commit .dev.vars or real keys.
+# Use the free Cloudflare Workers plan and Supabase free project.
+SUPABASE_URL=""
+SUPABASE_PUBLISHABLE_KEY=""
+SUPABASE_SERVICE_ROLE_KEY=""
+GUEST_COOKIE_SECRET=""
+APP_ORIGIN="http://localhost:8787"
+TINYFISH_API_KEY=""
+TINYFISH_ENABLED="false"
+# Refresh this timestamp only after the owner verifies current account contract rates.
+# It must be a UTC ISO timestamp no older than 24 hours, never a future timestamp.
+TINYFISH_RATES_VERIFIED_AT=""
+TINYFISH_AGENT_RATE="0.016"
+TINYFISH_SEARCH_RATE="0.005"
+TINYFISH_FETCH_RATE="0.001"
+GOOGLE_AUTH_ENABLED="false"

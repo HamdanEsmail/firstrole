@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars*
+.env*
+!.env.example
+!.dev.vars.example
+*.tsbuildinfo
+coverage/
+artifacts/private/
+supabase/.temp/
