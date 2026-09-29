@@ -72,12 +72,25 @@ export class TinyFish {
     if (init.body) headers.set('content-type', 'application/json');
     let response: Response;
     try {
-      response = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(timeout) });
+      response = await fetch(url, {
+        ...init,
+        headers,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(timeout),
+      });
     } catch {
       throw new AppError(
         'PROVIDER_TIMEOUT',
         'The source check timed out. Existing results are preserved; a paid run will not be submitted twice.',
         504,
+      );
+    }
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      throw new AppError(
+        'PROVIDER_REDIRECT',
+        'The provider returned an unexpected redirect. This check was stopped without forwarding credentials.',
+        502,
       );
     }
     if (!response.ok) {
@@ -119,12 +132,19 @@ export class TinyFish {
     return boundedJson<T>(response, maxBytes);
   }
 
-  async search(query: string, key: string): Promise<SearchHit[]> {
+  async search(
+    query: string,
+    key: string,
+    options: { includeDomains?: string; excludeDomains?: string } = {},
+  ): Promise<SearchHit[]> {
     const op = await this.admit(key, 'search');
+    let settlementAttempted = false;
     try {
       const url = new URL('https://api.search.tinyfish.ai');
       url.searchParams.set('query', query);
       url.searchParams.set('language', 'en');
+      if (options.includeDomains) url.searchParams.set('include_domains', options.includeDomains);
+      if (options.excludeDomains) url.searchParams.set('exclude_domains', options.excludeDomains);
       url.searchParams.set(
         'purpose',
         'Find current direct job postings and company careers portals for a student or recent graduate. Avoid articles and expired vacancies.',
@@ -135,12 +155,13 @@ export class TinyFish {
         25_000,
         96 * 1024,
       );
+      settlementAttempted = true;
       await this.db.settle(op.id, op.token, 'completed');
       return (result.results ?? [])
         .filter((r) => r && typeof r.title === 'string' && safePublicUrl(r.url))
         .slice(0, 10);
     } catch (error) {
-      await this.db.settle(op.id, op.token, 'failed').catch(() => {});
+      if (!settlementAttempted) await this.db.settle(op.id, op.token, 'failed').catch(() => {});
       throw error;
     }
   }
@@ -153,6 +174,7 @@ export class TinyFish {
         'This listing does not have a supported public source URL.',
       );
     const op = await this.admit(key, 'fetch', 1, new URL(safe).hostname);
+    let settlementAttempted = false;
     try {
       const result = await this.request<{ results?: FetchedPage[]; errors?: { error?: string }[] }>(
         'https://api.fetch.tinyfish.ai',
@@ -172,6 +194,7 @@ export class TinyFish {
         30_000,
         192 * 1024,
       );
+      settlementAttempted = true;
       await this.db.settle(op.id, op.token, 'completed');
       const page = result.results?.[0];
       if (!page) {
@@ -192,7 +215,7 @@ export class TinyFish {
       }
       return page;
     } catch (error) {
-      await this.db.settle(op.id, op.token, 'failed').catch(() => {});
+      if (!settlementAttempted) await this.db.settle(op.id, op.token, 'failed').catch(() => {});
       throw error;
     }
   }

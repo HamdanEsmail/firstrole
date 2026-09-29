@@ -94,16 +94,14 @@ describe('provider admission and duplicate protection', () => {
     const db = database();
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(
-            JSON.stringify({
-              error: { message: 'output_schema capability not enabled for this account' },
-            }),
-            { status: 403 },
-          ),
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: { message: 'output_schema capability not enabled for this account' },
+          }),
+          { status: 403 },
         ),
+      ),
     );
     await expect(
       new TinyFish(env(), db as unknown as Database, 's1').startAgent(
@@ -155,5 +153,37 @@ describe('provider admission and duplicate protection', () => {
       ttl: 0,
       urls: ['https://careers.example.com/jobs/123'],
     });
+    expect(db.settle).toHaveBeenCalledTimes(1);
+    expect(outbound.mock.calls[0][1].redirect).toBe('manual');
+  });
+  it('does not repeat a settlement request after a storage failure', async () => {
+    const db = database();
+    db.settle.mockRejectedValue(new Error('storage unavailable'));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ results: [] }))),
+    );
+    await expect(
+      new TinyFish(env(), db as unknown as Database, 's1').search('software intern', 's1'),
+    ).rejects.toThrow();
+    expect(db.settle).toHaveBeenCalledTimes(1);
+  });
+  it('uses workerd-supported manual redirects and rejects 3xx without forwarding credentials', async () => {
+    const db = database();
+    const outbound = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://unrelated.example/collect' },
+        }),
+      );
+    vi.stubGlobal('fetch', outbound);
+    await expect(
+      new TinyFish(env(), db as unknown as Database, 's1').search('software intern', 's1'),
+    ).rejects.toMatchObject({ code: 'PROVIDER_REDIRECT', status: 502 });
+    expect(outbound).toHaveBeenCalledTimes(1);
+    expect(outbound.mock.calls[0][0]).toContain('https://api.search.tinyfish.ai');
+    expect(outbound.mock.calls[0][1].redirect).toBe('manual');
   });
 });

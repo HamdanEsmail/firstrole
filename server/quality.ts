@@ -1,6 +1,7 @@
 import type { Job, SearchPreferences } from '../shared/types';
 import { AppError } from './env';
 import { safePublicUrl, sha256 } from './http';
+import { extractRoleContent, sourceCompanyCase } from './content';
 
 const text = (value: unknown, max = 300): string =>
   typeof value === 'string'
@@ -17,9 +18,13 @@ const words = (value: string): string[] =>
       (w) => !['the', 'and', 'for', 'with', 'job', 'jobs', 'role', 'in', 'of'].includes(w),
     ) ?? [];
 const CLOSED =
-  /(?:this (?:job|position|vacancy|opening) (?:is|has been) (?:now )?(?:closed|filled|removed)|no longer (?:accepting applications|available)|job (?:has )?expired|position has been filled)/i;
+  /(?:this (?:job|position|vacancy|opening) (?:is|has been) (?:now )?(?:closed|filled|removed)|\b(?:job|position|vacancy|opening)\b[^.!?\n]{0,100}\bhas been (?:filled|closed|removed)\b|no longer (?:accepting applications|available)|job (?:has )?expired|position has been filled)/i;
 const SENIOR =
   /\b(senior|sr\.?|principal|director|head of|vice president|staff engineer|lead engineer)\b/i;
+
+export function listingClosed(value: unknown): boolean {
+  return typeof value === 'string' && CLOSED.test(value.slice(0, 60_000));
+}
 
 function sponsorshipFromText(value: string): Job['sponsorship'] {
   const content = value
@@ -109,6 +114,33 @@ const placeText = (value: string) =>
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
 const hasPlace = (haystack: string, needle: string) => ` ${haystack} `.includes(` ${needle} `);
+
+export function hasRecognizedLocation(value: string): boolean {
+  const normalized = placeText(value);
+  return Object.values(COUNTRY_AREAS).some((aliases) =>
+    aliases.some((alias) => alias.length > 2 && hasPlace(normalized, alias)),
+  );
+}
+
+export function hasConflictingLocation(value: string, requested: string): boolean {
+  if (
+    !hasRecognizedLocation(value) ||
+    locationEligible({ location: value, workplace: 'onsite', remoteRegion: null }, requested)
+  )
+    return false;
+  const source = placeText(value);
+  const wanted = placeText(requested);
+  const country = Object.entries(COUNTRY_AREAS).find(([, aliases]) =>
+    aliases.some((alias) => hasPlace(wanted, alias)),
+  )?.[0];
+  if (country && COUNTRY_NAMES[country].some((alias) => hasPlace(source, alias))) {
+    const specificPlace = Object.entries(COUNTRY_AREAS).some(([code, aliases]) =>
+      aliases.some((alias) => !COUNTRY_NAMES[code].includes(alias) && hasPlace(source, alias)),
+    );
+    if (!specificPlace) return false;
+  }
+  return true;
+}
 
 export function locationEligible(
   job: Pick<Job, 'location' | 'workplace' | 'remoteRegion'>,
@@ -203,6 +235,11 @@ export function sourceCandidate(value: unknown): string | null {
   const url = safePublicUrl(value);
   if (!url) return null;
   const parsed = new URL(url);
+  if (
+    /(?:^|\.)google\.com$/.test(parsed.hostname) &&
+    /\/jobs\/results\/jobs\/results\//i.test(parsed.pathname)
+  )
+    return null;
   if (/\.(pdf|docx?|xlsx?|zip)$/i.test(parsed.pathname)) return null;
   if (
     /(?:^|\.)(youtube\.com|facebook\.com|instagram\.com|reddit\.com|pinterest\.com|tiktok\.com)$/.test(
@@ -429,6 +466,56 @@ export async function normalizeAgentJob(
   return job;
 }
 
+function employerFromSource(
+  content: string,
+  metadataTitle: string,
+  roleTitle: string,
+  url: string,
+): string | null {
+  const host = new URL(url).hostname;
+  const companyHeading = content.match(
+    /^###\s+(.+?)\s*[-–—|]\s*(?:Students|Careers|Jobs|Early Careers)\s*$/im,
+  )?.[1];
+  const describedCompany = content
+    .match(/^#{1,6}\s+Company Description\s*\n+([\p{L}\p{N}&.'’ -]{2,70}?)\s+(?:is|are)\b/imu)?.[1]
+    ?.trim();
+  const suffix = metadataTitle.match(/\s+(?:\||–|—)\s+([^|]+?)(?:\s+Careers)?$/i)?.[1]?.trim();
+  const invalidSuffix =
+    suffix &&
+    /^(?:spring|summer|autumn|fall|winter|class of|cohort|20\d{2}|remote|hybrid|full[- ]time|part[- ]time|careers?|jobs?)\b|smartrecruiters|workday|greenhouse|lever|ashby/i.test(
+      suffix,
+    );
+  return (
+    content.match(/(?:Company|Employer|Hiring organization)\*{0,2}\s*[:：]\s*([^\n]+)/i)?.[1] ||
+    roleTitle.match(/\s+at\s+(.+)$/i)?.[1] ||
+    metadataTitle.match(/\s+at\s+(.+)$/i)?.[1] ||
+    companyHeading ||
+    (describedCompany && !/^(?:we|our|the company|this company)\b/i.test(describedCompany)
+      ? describedCompany
+      : null) ||
+    (/myworkdayjobs\.com$/.test(host) ? host.split('.')[0] : null) ||
+    (suffix && !invalidSuffix ? suffix : null) ||
+    (/lever\.co$|greenhouse\.io$|ashbyhq\.com$|smartrecruiters\.com$/.test(host)
+      ? new URL(url).pathname.split('/').filter(Boolean)[0]
+      : null) ||
+    null
+  );
+}
+
+function cleanRoleTitle(value: string, company: string): string {
+  let result = value.replace(/^(job application for|apply for)\s+/i, '').trim();
+  const at = result.match(/^(.*?)\s+at\s+(.+)$/i);
+  if (at && at[2].toLowerCase() === company.toLowerCase()) result = at[1];
+  const suffix = result.match(/^(.*?)\s+(?:\||–|—|-)\s+(.+)$/);
+  if (
+    suffix &&
+    (suffix[2].toLowerCase() === company.toLowerCase() ||
+      /^(?:smartrecruiters|workday|greenhouse|careers)$/i.test(suffix[2]))
+  )
+    result = suffix[1];
+  return result.trim();
+}
+
 export async function extractPageJob(
   page: {
     url: string;
@@ -442,45 +529,80 @@ export async function extractPageJob(
   const url = sourceCandidate(page.final_url || page.url);
   if (!url || !isJobDetail(url) || typeof page.text !== 'string') return null;
   const content = page.text.slice(0, 60_000);
-  const heading = [...content.matchAll(/^#{1,2}\s+([^\n]+)/gm)]
+  const roleContent = extractRoleContent(content);
+  const headings = [...content.matchAll(/^#{1,2}\s+([^\n]+)/gm)]
     .map((match) => match[1])
-    .find(
+    .filter(
       (value) =>
-        !/^(careers?|welcome|job search|search results|locations?|time type|posted on)\b/i.test(
+        !/^(careers?|welcome|job (?:search|details|description)|search results|locations?|time type|posted on)\b/i.test(
           value,
         ),
     );
+  const metadataRole = (page.title || '').replace(/\s+at\s+.+$/i, '').split(/\s+(?:\||–|—)\s+/)[0];
+  const metadataWords = words(metadataRole);
+  const heading =
+    headings.find(
+      (value) =>
+        metadataWords.length >= 2 &&
+        metadataWords.filter((word) => words(value).includes(word)).length >=
+          Math.ceil(metadataWords.length * 0.7),
+    ) || headings[0];
   const pageTitle = text(heading || page.title, 250);
   if (
     !pageTitle ||
+    (!heading && /(?:^|\s)careers?$/i.test(pageTitle)) ||
     /^(careers?|job search|jobs|search results|access denied|sign in)/i.test(pageTitle)
   )
     return null;
-  const title = pageTitle
-    .replace(/^(job application for|apply for)\s+/i, '')
-    .split(/\s+(?:\||–|—)\s+/)[0]
-    .trim();
-  const host = new URL(url).hostname;
-  const companyHeading = content.match(
-    /^###\s+(.+?)\s*[-–—|]\s*(?:Students|Careers|Jobs|Early Careers)\s*$/im,
-  )?.[1];
-  const titleCompany = (page.title || '').match(/\s+(?:\||–|—)\s+([^|]+?)(?:\s+Careers)?$/i)?.[1];
-  const company =
-    content.match(/(?:Company|Employer|Hiring organization)\*{0,2}\s*[:：]\s*([^\n]+)/i)?.[1] ||
-    pageTitle.match(/\s+at\s+(.+)$/i)?.[1] ||
-    companyHeading ||
-    (titleCompany && !/smartrecruiters|workday|greenhouse|lever|ashby/i.test(titleCompany)
-      ? titleCompany
-      : null) ||
-    (/lever\.co$|greenhouse\.io$|ashbyhq\.com$|smartrecruiters\.com$/.test(host)
-      ? new URL(url).pathname.split('/').filter(Boolean)[0]
-      : null) ||
-    (/myworkdayjobs\.com$/.test(host) ? host.split('.')[0] : null);
+  const company = employerFromSource(content, page.title || '', pageTitle, url);
   if (!company) return null;
-  const location =
+  const title = cleanRoleTitle(pageTitle, company);
+  const labelledLocation =
     content
       .match(/(?:^|\n)\*{0,2}(?:Locations?|Job location)\*{0,2}\s*[:：]?\s*\n?\s*([^\n]+)/i)?.[1]
       ?.replace(/\*\*/g, '') ?? 'Location not stated';
+  const headingPosition = heading ? content.indexOf(heading) + heading.length : -1;
+  const adjacent =
+    headingPosition >= 0
+      ? content
+          .slice(headingPosition)
+          .split('\n')
+          .map((line) => line.trim())
+          .find(Boolean) || ''
+      : '';
+  const adjacentPlace = placeText(adjacent);
+  const hasVisibleLocation =
+    adjacent.length <= 160 &&
+    !adjacent.startsWith('#') &&
+    (Object.values(COUNTRY_AREAS).some((aliases) =>
+      aliases.some((alias) => hasPlace(adjacentPlace, alias)),
+    ) ||
+      hasPlace(adjacentPlace, placeText(p.location)));
+  // A role-specific statement provides location evidence; citizenship wording does not.
+  const proseLocation = roleContent.description
+    .match(
+      /(?:\bjoin(?:ing)?\s+(?:our|the)\s+[^.!?]{0,50}?team\s+in|\b(?:this|the)\s+(?:role|position|opportunity)\s+(?:is|will be)\s+(?:based|located)\s+in|\byou\s+(?:will be|are)\s+based\s+in)\s+([^.!?;\n]{2,120})/i,
+    )?.[1]
+    ?.split(/\s+(?:where|which|with|to help|as part)\b/i)[0]
+    ?.trim();
+  const hasProseLocation = Boolean(
+    proseLocation &&
+    !/\b(?:nationals?|citizens?|citizenship|sponsorship|visa)\b/i.test(proseLocation) &&
+    (hasRecognizedLocation(proseLocation) ||
+      locationEligible(
+        { location: proseLocation, workplace: 'onsite', remoteRegion: null },
+        p.location,
+      )),
+  );
+  const location =
+    labelledLocation === 'Location not stated' ||
+    /\[\[|\{\{|^\s*[,;]|^\s*\*|not (?:specified|stated)/i.test(labelledLocation)
+      ? hasVisibleLocation
+        ? adjacent
+        : hasProseLocation
+          ? proseLocation!
+          : 'Location not stated'
+      : labelledLocation;
   const employmentType = /\bintern(?:ship)?\b/i.test(title)
     ? 'internship'
     : /\b(graduate|new grad)\b/i.test(title)
@@ -498,21 +620,26 @@ export async function extractPageJob(
   const job = await normalizeAgentJob(
     {
       title,
-      company,
+      company: sourceCompanyCase(company, content),
       location,
       employmentType,
       workplace,
       sourceUrl: url,
       applyUrl: url,
-      description: content.slice(0, 3500),
-      requirements: content
-        .split('\n')
-        .filter((line) => /^[-*]\s/.test(line))
-        .slice(0, 6)
-        .map((line) => line.replace(/^[-*]\s*/, '')),
+      description: roleContent.description,
+      requisitionId:
+        content.match(
+          /(?:Requisition(?:\s+(?:Number|ID))?|Job\s*(?:ID|Number))\*{0,2}\s*:\*{0,2}\s*([\w-]{3,})/i,
+        )?.[1] || null,
+      requirements: roleContent.requirements,
       evidence: [
         { field: 'title', text: pageTitle, sourceUrl: url },
-        { field: 'listing', text: content.slice(0, 650), sourceUrl: url },
+        ...(location !== 'Location not stated'
+          ? [{ field: 'location', text: location, sourceUrl: url }]
+          : []),
+        ...(roleContent.description
+          ? [{ field: 'listing', text: roleContent.description.slice(0, 650), sourceUrl: url }]
+          : []),
       ],
     },
     url,
@@ -523,7 +650,13 @@ export async function extractPageJob(
 
 export function verifyJob(
   job: Job,
-  page: { text?: unknown; links?: string[]; final_url?: string; url?: string },
+  page: {
+    text?: unknown;
+    links?: string[];
+    final_url?: string;
+    url?: string;
+    title?: string | null;
+  },
   p: SearchPreferences,
 ): Job {
   const content = typeof page.text === 'string' ? page.text.slice(0, 60_000) : '';
@@ -542,11 +675,15 @@ export function verifyJob(
   const applicationButton = /(?:^|\n)\s*(?:\[)?(?:Apply|I['’]m interested)(?:\]|\s|$)/im.test(
     content,
   );
+  const requisition =
+    /(?:Requisition(?:\s+(?:Number|ID))?|Job\s*(?:ID|Number))\*{0,2}\s*:\*{0,2}\s*[\w-]{3,}/i.test(
+      content,
+    );
   const explicitOpen =
     /\b(apply (?:now|for this|to this)|submit (?:your )?application|application form|apply for (?:this|the) (?:job|role|position))\b/i.test(
       content,
     ) ||
-    (applyLink && applicationButton);
+    ((applyLink || requisition) && applicationButton);
   const login =
     /\b(sign in to continue|log in to (?:view|continue)|access denied|verify you are human)\b/i.test(
       content.slice(0, 1000),
@@ -567,17 +704,40 @@ export function verifyJob(
         : 'unverified',
   };
   if (content && !login) {
-    result.requirements = job.requirements.filter((requirement) =>
-      normalizedContent.includes(normalize(requirement)),
+    const roleContent = extractRoleContent(content);
+    result.description = roleContent.description;
+    result.requirements = roleContent.requirements;
+    const freshCompany = employerFromSource(
+      content,
+      page.title || '',
+      job.title,
+      final || job.sourceUrl,
     );
+    result.company = sourceCompanyCase(freshCompany || job.company, content);
+    if (page.title && !/\bcareers?$/i.test(page.title)) {
+      const candidate = cleanRoleTitle(page.title, result.company);
+      if (
+        words(job.title).filter((word) => words(candidate).includes(word)).length >=
+        Math.min(2, words(job.title).length)
+      )
+        result.title = candidate;
+    }
     result.salary =
       job.salary && normalizedContent.includes(normalize(job.salary.text)) ? job.salary : null;
     result.postedAt = evidenceDate(job.postedAt, content);
     result.deadline = evidenceDate(job.deadline, content);
     result.sponsorship = sponsorshipFromText(content);
     result.evidence = job.evidence.filter(
-      (e) => e.sourceUrl !== job.sourceUrl || normalizedContent.includes(normalize(e.text)),
+      (e) =>
+        e.field !== 'listing' &&
+        (e.sourceUrl !== job.sourceUrl || normalizedContent.includes(normalize(e.text))),
     );
+    if (roleContent.description)
+      result.evidence.push({
+        field: 'listing',
+        text: roleContent.description.slice(0, 650),
+        sourceUrl: final || job.sourceUrl,
+      });
     if (
       job.applyUrl !== job.sourceUrl &&
       !(page.links ?? []).some((link) => safePublicUrl(link) === job.applyUrl)
@@ -586,7 +746,13 @@ export function verifyJob(
   }
   const evidenceLine = content
     .split('\n')
-    .find((line) => CLOSED.test(line) || /apply now|submit (?:your )?application/i.test(line));
+    .find(
+      (line) =>
+        CLOSED.test(line) ||
+        /apply now|submit (?:your )?application|^\s*(?:\[)?(?:Apply|I['’]m interested)(?:\]|\s|$)/i.test(
+          line,
+        ),
+    );
   if (evidenceLine)
     result.evidence = [
       ...result.evidence.filter((e) => e.field !== 'availability'),
@@ -626,11 +792,12 @@ export function deduplicate(jobs: Job[]): Job[] {
 
 export function fingerprintInput(p: SearchPreferences): string {
   return JSON.stringify({
-    ...p,
     role: p.role.toLowerCase(),
     location: p.location.toLowerCase(),
     keywords: p.keywords.toLowerCase(),
     jobTypes: [...p.jobTypes].sort(),
     workplaces: [...p.workplaces].sort(),
+    postedWithinDays: p.postedWithinDays,
+    sponsorshipRequired: p.sponsorshipRequired,
   });
 }

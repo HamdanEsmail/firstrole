@@ -13,6 +13,7 @@ import type { Job } from '../../shared/types';
 import { typeLabels, workplaceLabels } from './Jobs';
 import { Modal } from './Modal';
 import type { WorkspaceOverlay, WorkspaceUser } from './AppChrome';
+import { PrivacyNoticeContent } from './PrivacyPage';
 
 interface WorkspaceDialogsProps {
   overlay: WorkspaceOverlay;
@@ -89,8 +90,8 @@ export function WorkspaceDialogs({
             <ArrowRight size={16} />
           </button>
           <p className="modal-fineprint">
-            We only request your basic Google profile to identify your account. We do not access
-            your email or files.
+            We only request your basic Google profile to identify your account. We do not read
+            your email messages or files.
           </p>
         </Modal>
       )}
@@ -102,7 +103,7 @@ export function WorkspaceDialogs({
             </span>
             <div>
               <strong>{user?.name || 'FirstRole member'}</strong>
-              <p>{user?.email}</p>
+              <p>Connected with Google</p>
             </div>
           </div>
           <div className="account-options">
@@ -236,31 +237,7 @@ export function WorkspaceDialogs({
       )}
       {overlay === 'privacy' && (
         <Modal title="Your workspace, your data." onClose={() => setOverlay(null)}>
-          <div className="privacy-copy">
-            <h3>As a guest</h3>
-            <p>
-              Saved jobs, notes, and preferences stay in this browser. Clearing browser storage
-              removes them.
-            </p>
-            <h3>With an account</h3>
-            <p>
-              Google supplies your basic sign-in identity. Supabase stores your preferences and
-              saved workspace with access limited to your account. Export or delete your data from
-              the account menu.
-            </p>
-            <h3>When you search</h3>
-            <p>
-              Your role, location, and search filters are sent to TinyFish to find relevant public
-              listings. Personal application notes are not sent to TinyFish. FirstRole keeps
-              short-lived search records and limited usage records to operate the pilot and prevent
-              abuse.
-            </p>
-            <h3>When you apply</h3>
-            <p>
-              The employer’s site opens in a new tab. FirstRole does not submit your application,
-              upload a résumé, or contact recruiters.
-            </p>
-          </div>
+          <PrivacyNoticeContent headingLevel="h3" />
         </Modal>
       )}
       {overlay === 'compare' && (

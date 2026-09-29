@@ -345,6 +345,7 @@ export default function App() {
     const sourceSearch = run?.results.some((item) => item.id === job.id) ? run.id : undefined;
     refreshLock.current = true;
     setRefreshingScope(scope);
+    setError(null);
     try {
       const updated = await refreshJob(job.id, workspace.accessToken, sourceSearch);
       if (!isCurrent(requestScope) || sequence !== refreshSequence.current) return;

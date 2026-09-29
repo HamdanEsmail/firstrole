@@ -3,6 +3,9 @@ begin;
 create function public.firstrole_test_assert(ok boolean,message text) returns void language plpgsql as $$
 begin if ok is distinct from true then raise exception 'ASSERTION FAILED: %',message; end if; end;
 $$;
+select public.firstrole_test_assert((select not enabled and spent_usd=0 and reserved_usd=0 from public.budget_guard where singleton),'new deployment starts disabled with an empty ledger');
+-- Explicit opt-in for this rollback-only test transaction; never enable a live project from fixtures.
+update public.budget_guard set enabled=true where singleton;
 insert into auth.users(id) values ('11111111-1111-4111-8111-111111111111'),('22222222-2222-4222-8222-222222222222');
 
 -- RLS: ownership, no forged insert, no moving a row, no private tables/RPC access.

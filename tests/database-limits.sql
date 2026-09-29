@@ -2,6 +2,9 @@ begin;
 create function public.firstrole_test_assert(ok boolean,message text) returns void language plpgsql as $$
 begin if ok is distinct from true then raise exception 'ASSERTION FAILED: %',message; end if; end;
 $$;
+select public.firstrole_test_assert((select not enabled from public.budget_guard where singleton),'previous isolated suite rolled back its opt-in');
+-- Explicit opt-in for this rollback-only test transaction.
+update public.budget_guard set enabled=true where singleton;
 create function public.firstrole_test_run(actor text,network text,assisted boolean default true,owner_id uuid default null) returns uuid language plpgsql as $$
 declare v_id uuid:=gen_random_uuid(); v jsonb;
 begin

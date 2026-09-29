@@ -8,6 +8,10 @@ export interface Env {
   TINYFISH_API_KEY?: string;
   TINYFISH_ENABLED?: string;
   TINYFISH_RATES_VERIFIED_AT?: string;
+  /** Optional binding for an initial, manually verified rate proof. */
+  TINYFISH_RATES_KEY_SHA256?: string;
+  /** Runtime-only proof expiry, retained in safe Workflow rate snapshots. */
+  TINYFISH_RATES_EXPIRES_AT?: string;
   TINYFISH_AGENT_RATE?: string;
   TINYFISH_SEARCH_RATE?: string;
   TINYFISH_FETCH_RATE?: string;
@@ -36,21 +40,36 @@ export function databaseReady(env: Env): boolean {
   );
 }
 
+export function providerConfigured(env: Env): boolean {
+  return (
+    databaseReady(env) && env.TINYFISH_ENABLED === 'true' && Boolean(env.TINYFISH_API_KEY?.trim())
+  );
+}
+
 export function providerReady(env: Env): boolean {
   const verified = Date.parse(env.TINYFISH_RATES_VERIFIED_AT ?? '');
   const age = Date.now() - verified;
+  const proofExpiry = env.TINYFISH_RATES_EXPIRES_AT
+    ? Date.parse(env.TINYFISH_RATES_EXPIRES_AT)
+    : null;
   const rates = [
     Number(env.TINYFISH_AGENT_RATE),
     Number(env.TINYFISH_SEARCH_RATE),
     Number(env.TINYFISH_FETCH_RATE),
   ];
+  const rateValues = [env.TINYFISH_AGENT_RATE, env.TINYFISH_SEARCH_RATE, env.TINYFISH_FETCH_RATE];
   return (
-    databaseReady(env) &&
-    env.TINYFISH_ENABLED === 'true' &&
-    Boolean(env.TINYFISH_API_KEY) &&
+    providerConfigured(env) &&
     Number.isFinite(verified) &&
     age >= 0 &&
     age <= 24 * 60 * 60 * 1000 &&
+    rateValues.every(
+      (rate) => typeof rate === 'string' && /^(?:0|[1-9]\d*)(?:\.\d{1,12})?$/.test(rate),
+    ) &&
+    (proofExpiry === null ||
+      (Number.isFinite(proofExpiry) &&
+        proofExpiry > Date.now() &&
+        proofExpiry - verified <= 6 * 60 * 60 * 1000)) &&
     rates.every(Number.isFinite) &&
     rates.every((rate) => rate >= 0) &&
     rates[0] <= 0.016 &&

@@ -47,16 +47,14 @@ describe('API authentication and search retry safety', () => {
   it('preserves actionable server quota errors', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(
-            JSON.stringify({
-              error: { code: 'budget_exhausted', message: 'The pilot allowance has been used.' },
-            }),
-            { status: 429 },
-          ),
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: { code: 'budget_exhausted', message: 'The pilot allowance has been used.' },
+          }),
+          { status: 429 },
         ),
+      ),
     );
     await expect(getSearch('search-a')).rejects.toMatchObject({
       status: 429,
@@ -96,5 +94,59 @@ describe('API authentication and search retry safety', () => {
     expect(persisted).not.toContain('private-location');
     expect(persisted).not.toContain('token-a');
     expect(persisted).not.toContain('account-a');
+  });
+  it('retries the exact guest handshake once with the original key and request body', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ error: { code: 'GUEST_SESSION_READY', message: 'Session ready' } }),
+          { status: 425 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 'handshake-search' }), { status: 202 }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      startSearch({ ...DEFAULT_PREFERENCES, role: 'Client handshake test' }),
+    ).resolves.toMatchObject({ id: 'handshake-search' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const first = fetchMock.mock.calls[0][1] as RequestInit;
+    const second = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(new Headers(first.headers).get('Idempotency-Key')).toBe(
+      new Headers(second.headers).get('Idempotency-Key'),
+    );
+    expect(first.body).toBe(second.body);
+  });
+  it('does not automatically retry unrelated 425 errors', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ error: { code: 'ANOTHER_CONDITION', message: 'Try later' } }),
+          { status: 425 },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      startSearch({ ...DEFAULT_PREFERENCES, role: 'Unrelated 425 test' }),
+    ).rejects.toMatchObject({ code: 'ANOTHER_CONDITION' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('does not treat a handshake code under a different status as retry permission', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ error: { code: 'GUEST_SESSION_READY', message: 'Unexpected status' } }),
+          { status: 409 },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      startSearch({ ...DEFAULT_PREFERENCES, role: 'Wrong-status handshake test' }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

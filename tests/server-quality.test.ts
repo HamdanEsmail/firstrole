@@ -81,6 +81,17 @@ describe('source integrity and response bounds', () => {
 });
 
 describe('preferences and fit', () => {
+  it('keeps cache identity after PostgreSQL JSONB reorders preference properties', () => {
+    const apiPreferences = validatePreferences(preferences);
+    const storedPreferences = Object.fromEntries(
+      Object.entries(apiPreferences).sort(([a], [b]) => a.length - b.length || a.localeCompare(b)),
+    ) as unknown as SearchPreferences;
+    expect(Object.keys(storedPreferences)).not.toEqual(Object.keys(apiPreferences));
+    expect(fingerprintInput(storedPreferences)).toBe(fingerprintInput(apiPreferences));
+    expect(fingerprintInput({ ...apiPreferences, sponsorshipRequired: true })).not.toBe(
+      fingerprintInput(apiPreferences),
+    );
+  });
   it('requires a role, location, and opportunity type', () =>
     expect(() => validatePreferences({ role: 'x', location: '', jobTypes: [] })).toThrow());
   it('normalizes fingerprints across filter order', () =>
@@ -177,6 +188,124 @@ describe('preferences and fit', () => {
 });
 
 describe('source-grounded listing normalization', () => {
+  it('uses a Workday tenant as employer and preserves a seasonal role subtitle', async () => {
+    const url =
+      'https://medtronic.wd1.myworkdayjobs.com/en-US/MedtronicCareers/job/Software-Engineering-Intern---Summer-2027_R73630-1';
+    const page = {
+      url,
+      title: 'Software Engineering Intern – Summer 2027',
+      text: 'Medtronic uses cookies.\n## Software Engineering Intern – Summer 2027\n**locations**: US, Minnesota, Minneapolis\n## Job Description\nBuild medical software.\n**job requisition id**: R73630\nApply',
+      links: [`${url}/apply`],
+    };
+    const job = await extractPageJob(page, {
+      ...preferences,
+      role: 'Software engineer',
+      location: 'United States',
+    });
+    expect(job).toMatchObject({
+      company: 'Medtronic',
+      title: 'Software Engineering Intern – Summer 2027',
+      employmentType: 'internship',
+    });
+    const refreshed = verifyJob(
+      { ...job!, company: 'Summer 2027', title: 'Software Engineering Intern' },
+      page,
+      { ...preferences, role: 'Software engineer', location: 'United States' },
+    );
+    expect(refreshed.company).toBe('Medtronic');
+    expect(refreshed.title).toBe('Software Engineering Intern – Summer 2027');
+  });
+  it('extracts Egis geography only from its explicit role-location sentence', async () => {
+    const url =
+      'https://jobs.smartrecruiters.com/EgisGroup/744000106009115-graduate-mechanical-engineer-mep-uae-national-';
+    const job = await extractPageJob(
+      {
+        url,
+        title: 'Graduate Mechanical Engineer- MEP (UAE National)',
+        text: '# Graduate Mechanical Engineer- MEP (UAE National)\n\n* Full-time\n* Region: Middle East and South Asia\n\n## Company Description\n\nEgis is an international engineering group.\n\n## Job Description\n\nWe are seeking a Graduate Mechanical Engineer (UAE National) specialising in MEP systems to join our growing team in Dubai, United Arab Emirates.\n\n## Qualifications\n\n* A degree in mechanical engineering.',
+      },
+      {
+        ...preferences,
+        role: 'Engineering',
+        location: 'United Arab Emirates',
+        jobTypes: ['graduate'],
+      },
+    );
+    expect(job).toMatchObject({
+      company: 'Egis',
+      location: 'Dubai, United Arab Emirates',
+      employmentType: 'graduate',
+      availability: 'unverified',
+    });
+    expect(
+      eligible(job!, {
+        ...preferences,
+        role: 'Engineering',
+        location: 'United Arab Emirates',
+        jobTypes: ['graduate'],
+      }),
+    ).toBe(true);
+  });
+  it('does not infer geography from UAE-national eligibility or a regional business label', async () => {
+    const url = 'https://jobs.smartrecruiters.com/EgisGroup/744000106009115-graduate-engineer';
+    const job = await extractPageJob(
+      {
+        url,
+        title: 'Graduate Engineer (UAE National)',
+        text: '# Graduate Engineer (UAE National)\n* Full-time\n* Region: Middle East and South Asia\n## Company Description\nEgis is an engineering group.\n## Job Description\nApplicants must be UAE Nationals. Build useful engineering systems.',
+      },
+      preferences,
+    );
+    expect(job?.location).toBe('Location not stated');
+  });
+  it('rejects a generic Workday careers shell without inventing a role from its URL', async () => {
+    const url =
+      'https://kbr.wd5.myworkdayjobs.com/kbr_careers/job/Project-Planner-Graduate-Engineer---UAE--Emirati-Nationals-Only_R2128569';
+    expect(
+      await extractPageJob(
+        {
+          url,
+          title: 'KBR Careers',
+          text: 'KBR Careers\nWelcome to our careers website.\nSign in\nPrivacy notice',
+        },
+        preferences,
+      ),
+    ).toBeNull();
+  });
+  it('parses the observed Halliburton layout without treating its city placeholder as a location', async () => {
+    const url =
+      'https://careers.halliburton.com/job/united-arab-emirates/intern-and-entry-level-graduate/543/100976776112';
+    const job = await extractPageJob(
+      {
+        url,
+        title: 'Intern & Entry Level Graduate at Halliburton',
+        text: '# Job Details\n## Recognized in Red\n## Intern & Entry Level Graduate\n\nUnited Arab Emirates\n\n### Job Description\nEntry level engineering work.\n**Location**\n\n, [[city]], , ,\n\n**Requisition Number:** 211894\nApply',
+        links: [],
+      },
+      { ...preferences, location: 'United Arab Emirates' },
+    );
+    expect(job).toMatchObject({
+      title: 'Intern & Entry Level Graduate',
+      company: 'Halliburton',
+      location: 'United Arab Emirates',
+      employmentType: 'internship',
+      requisitionId: '211894',
+      availability: 'open',
+    });
+    expect(eligible(job!, { ...preferences, location: 'United Arab Emirates' })).toBe(true);
+  });
+  it('does not invent a location when both the location label and title-adjacent evidence are missing', async () => {
+    const job = await extractPageJob(
+      {
+        url: sourceUrl,
+        title: 'Engineering Intern at Example',
+        text: '# Job Details\n## Engineering Intern\n### Job Description\nBuild systems.\n**Location**\n[[city]]\nApply',
+      },
+      preferences,
+    );
+    expect(job?.location).toBe('Location not stated');
+    expect(eligible(job!, preferences)).toBe(false);
+  });
   it('rejects unsupported listing records without evidence or individual URLs', async () => {
     expect(
       await normalizeAgentJob(

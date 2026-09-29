@@ -1,6 +1,6 @@
 # FirstRole database
 
-Apply `migrations/202609290001_firstrole.sql` to a **new Supabase project** using the SQL editor or Supabase migrations. It creates the schema and grants; it does not provision a project, configure OAuth, or contact TinyFish. Never run `tests/database-bootstrap.sql` against a Supabase project: that file mocks Auth for isolated tests only.
+Apply the numbered files in `migrations/` in order to a **new Supabase project** using the SQL editor or Supabase migrations. On a project where the first migration already succeeded, apply only the later additive migration(s). They create the schema and grants; they do not provision a project, configure OAuth, or contact TinyFish. Never run `tests/database-bootstrap.sql` against a Supabase project: that file mocks Auth for isolated tests only.
 
 ## Browser account contract
 
@@ -74,9 +74,21 @@ Use `list_provider_operations` and provider status/billing evidence for reconcil
 
 Expired cache/search records are ignored by reads. No scheduler or cron is installed. If adding maintenance, delete expired cache rows freely, but preserve search rows with nonterminal/unreconciled provider operations until their run IDs can be safely retained for reconciliation. Never remove unsettled operation/ledger records as ordinary cleanup.
 
+## Automatic provider rate verification
+
+`202609290002_provider_rate_attestations.sql` adds only a private metadata table and three service-only RPCs. It does not update the existing budget guard, ledger, accounts, or allowance values. Before a new paid search or refresh, the Worker uses a fresh proof for the SHA-256 fingerprint of its API key, or verifies current rates with the SDK-documented `GET https://agent.tinyfish.ai/v1/wallet` and `X-API-Key` authentication. No raw key or wallet balance is stored in the proof table.
+
+The required USD meters are exactly `TinyFish Agent` per `step` at at most 0.016, `TinyFish Search` per `query` at at most 0.005, and `TinyFish Fetch` per `url` at at most 0.001. Missing, duplicate, malformed, differently denominated, excessive, or more than 60 seconds future-dated rates fail closed. Migration `202609290003_rate_clock_skew.sql` permits that bounded clock difference without extending the six-hour validity window. The metadata GET rejects redirects, has a ten-second timeout, and is limited to 64 KiB. A null rates read or legacy-plan 404 does not verify rates.
+
+Verified proofs expire six hours after the provider's `rates.as_of`. Refresh ownership uses a 30-second compare-and-set lease; only that exact token can complete it, preventing an old response from replacing or clearing a newer proof. Failed verification has a one-minute retry cooldown. The RPCs are `get_provider_rate_attestation`, `claim_provider_rate_refresh`, and `complete_provider_rate_refresh`; none are browser-callable.
+
+An initial manual environment proof can be used for at most 24 hours only when `TINYFISH_RATES_KEY_SHA256` matches the configured key's SHA-256 and no stored observation exists. This binding prevents a rotated key from inheriting another account's manual rate proof. The deployed app does not require that optional fallback: it can verify the first proof automatically.
+
+The public configuration no longer disables the search form solely because a manual timestamp has aged. The actual paid path must pass verification, and cached job results bypass that path. Each Workflow loads one safe rate snapshot with a single database read and does not issue wallet calls. Only rate values/timestamps are persisted in Workflow steps; API keys and environment bindings are not.
+
 ## Verification
 
-`tests/database-acceptance.sql` tests RLS, forbidden browser RPCs, import conflicts, request/operation idempotency, per-URL charges, claim replay, cancellation, uncertain reservations, source limits, safe cache reuse, budget boundaries, and deletion cascades. `tests/database-limits.sql` tests global/source Agent concurrency, retained-cost terminal states, the exact no-start fallback, daily actor/network limits, and tampered-snapshot URL isolation.
+`tests/database-acceptance.sql` tests RLS, forbidden browser RPCs, import conflicts, request/operation idempotency, per-URL charges, claim replay, cancellation, uncertain reservations, source limits, safe cache reuse, budget boundaries, and deletion cascades. `tests/database-limits.sql` tests global/source Agent concurrency, retained-cost terminal states, the exact no-start fallback, daily actor/network limits, and tampered-snapshot URL isolation. `tests/database-rates.sql` tests rate-proof permissions, key separation, refresh ownership, timestamps, price caps, cooldowns, and an unchanged budget guard. `tests/rates.test.ts` covers wallet-response validation and rate preflight without live provider calls.
 
 The tests were executed using PGlite's PostgreSQL engine in an isolated in-memory database, not by applying anything to a live Supabase project. PGlite is included in the repository's development dependencies. From a clean checkout, run them without installing PostgreSQL or starting Docker:
 

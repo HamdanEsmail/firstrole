@@ -9,10 +9,11 @@ import '@fontsource/source-sans-3/latin-500.css';
 import '@fontsource/source-sans-3/latin-600.css';
 import '@fontsource/source-sans-3/latin-700.css';
 import App from './App';
+import PrivacyPage from './components/PrivacyPage';
 import './styles.css';
 
+const isPrivacyPage = window.location.pathname.replace(/\/+$/, '') === '/privacy';
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
+  <React.StrictMode>{isPrivacyPage ? <PrivacyPage /> : <App />}</React.StrictMode>,
 );

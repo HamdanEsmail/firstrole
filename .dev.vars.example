@@ -7,9 +7,12 @@ GUEST_COOKIE_SECRET=""
 APP_ORIGIN="http://localhost:8787"
 TINYFISH_API_KEY=""
 TINYFISH_ENABLED="false"
-# Refresh this timestamp only after the owner verifies current account contract rates.
-# It must be a UTC ISO timestamp no older than 24 hours, never a future timestamp.
+# Optional initial manual proof; runtime wallet metadata verifies rates automatically
+# when unset. Private automatic proofs last six hours and never reset the pilot budget.
+# A manual UTC timestamp is valid for at most 24 hours and requires the current
+# API key's SHA-256 below. Never put the API key itself in the fingerprint field.
 TINYFISH_RATES_VERIFIED_AT=""
+TINYFISH_RATES_KEY_SHA256=""
 TINYFISH_AGENT_RATE="0.016"
 TINYFISH_SEARCH_RATE="0.005"
 TINYFISH_FETCH_RATE="0.001"

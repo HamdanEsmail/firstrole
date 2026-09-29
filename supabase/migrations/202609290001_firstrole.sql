@@ -47,7 +47,7 @@ create table public.budget_guard (
   limit_usd numeric(12,6) not null default 10 check (limit_usd >= 0),
   spent_usd numeric(12,6) not null default 0 check (spent_usd >= 0),
   reserved_usd numeric(12,6) not null default 0 check (reserved_usd >= 0),
-  enabled boolean not null default true,
+  enabled boolean not null default false,
   updated_at timestamptz not null default now()
 );
 insert into public.budget_guard(singleton) values (true);

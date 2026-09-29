@@ -120,12 +120,42 @@ export async function startSearch(
   );
   const id = readPending(key) ?? crypto.randomUUID();
   persistPending(key, id);
-  try {
-    const result = await request<SearchRun>('/api/searches', token, {
+  const submit = () =>
+    request<SearchRun>('/api/searches', token, {
       method: 'POST',
       headers: { 'Idempotency-Key': id },
       body: JSON.stringify({ preferences, forceRefresh }),
     });
+  try {
+    let result: SearchRun;
+    try {
+      result = await submit();
+    } catch (error) {
+      if (
+        token ||
+        !(error instanceof ApiError) ||
+        error.status !== 425 ||
+        error.code !== 'GUEST_SESSION_READY'
+      )
+        throw error;
+      // This exact server response guarantees no run was admitted. The browser
+      // has now received Set-Cookie; retry once with the same operation key.
+      try {
+        result = await submit();
+      } catch (retryError) {
+        if (
+          retryError instanceof ApiError &&
+          retryError.status === 425 &&
+          retryError.code === 'GUEST_SESSION_READY'
+        )
+          throw new ApiError(
+            425,
+            'GUEST_COOKIES_REQUIRED',
+            'Your browser could not keep the guest session. Allow cookies for FirstRole or sign in, then try again. No search was started.',
+          );
+        throw retryError;
+      }
+    }
     persistPending(key, null);
     return result;
   } catch (error) {

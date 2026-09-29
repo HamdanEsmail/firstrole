@@ -95,7 +95,7 @@ export function safePublicUrl(value: unknown): string | null {
       return null;
     url.hash = '';
     for (const key of [...url.searchParams.keys()])
-      if (/^(utm_|fbclid$|gclid$|ref$|source$)/i.test(key)) url.searchParams.delete(key);
+      if (/^(utm_|fbclid$|gclid$|trid$|ref$|source$)/i.test(key)) url.searchParams.delete(key);
     return url.toString();
   } catch {
     return null;

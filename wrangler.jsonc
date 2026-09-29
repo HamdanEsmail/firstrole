@@ -8,23 +8,36 @@
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"],
+    "run_worker_first": [
+      "/api/*"
+    ]
   },
   "workflows": [
     {
       "name": "firstrole-search",
       "binding": "SEARCH_WORKFLOW",
-      "class_name": "SearchWorkflow",
+      "class_name": "SearchWorkflow"
     },
     {
       "name": "firstrole-agent",
       "binding": "AGENT_WORKFLOW",
-      "class_name": "AgentWorkflow",
-    },
+      "class_name": "AgentWorkflow"
+    }
   ],
-  "observability": { "enabled": false },
-  "vars": {
-    "TINYFISH_ENABLED": "false",
-    "GOOGLE_AUTH_ENABLED": "false",
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
   },
+  "vars": {
+    "TINYFISH_ENABLED": "true",
+    "GOOGLE_AUTH_ENABLED": "true",
+    "SUPABASE_URL": "https://abhfpenjfdxvzbjodkqj.supabase.co",
+    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_muBuQF2dWZM_B-Y1KjNWvg_X4WN0mUq",
+    "APP_ORIGIN": "https://firstrole.hamdanesmail12-7a9.workers.dev",
+    "TINYFISH_AGENT_RATE": "0.016",
+    "TINYFISH_SEARCH_RATE": "0.005",
+    "TINYFISH_FETCH_RATE": "0.001",
+    "TINYFISH_RATES_VERIFIED_AT": "2026-09-29T15:45:36.145Z"
+  },
+  "account_id": "7a9527c6ccbedc4fe76c02eac18a0390"
 }

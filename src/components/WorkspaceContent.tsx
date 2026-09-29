@@ -257,7 +257,7 @@ export function WorkspaceContent({
               </button>
             )}
           </div>
-          {run && run.sources.length > 0 && (
+          {run && !starting && run.sources.length > 0 && (
             <div className="source-progress">
               {run.sources.map((source) => (
                 <span
@@ -281,7 +281,7 @@ export function WorkspaceContent({
           )}
         </section>
       )}
-      {view === 'find' && run && terminalRun && run.errors.length > 0 && (
+      {view === 'find' && run && !starting && terminalRun && run.errors.length > 0 && (
         <div className="coverage-note">
           <AlertCircle size={17} />
           <div>
@@ -299,6 +299,64 @@ export function WorkspaceContent({
           </div>
         </div>
       )}
+      {view === 'find' &&
+        run &&
+        !starting &&
+        ['completed', 'partial', 'failed'].includes(run.status) && (
+          <details className="source-coverage" key={run.id}>
+            <summary>
+              Sources checked
+              <span className="source-coverage-count">
+                {run.sources.length} {run.sources.length === 1 ? 'source' : 'sources'}
+              </span>
+            </summary>
+            <div className="source-coverage-content">
+              <p>
+                {run.results.length === 0
+                  ? 'No verified matches were returned from this search. The source statuses below show what could be checked.'
+                  : 'These are the sources considered for this search, including any checks that could not finish.'}
+                {run.cached ? ' This coverage comes from the previous search.' : ''}
+              </p>
+              {run.sources.length > 0 ? (
+                <>
+                  <ul className="source-coverage-list">
+                    {run.sources.map((source) => (
+                      <li key={source.url}>
+                        <div className="source-coverage-row">
+                          <a href={source.url} target="_blank" rel="noopener noreferrer">
+                            {source.name}
+                            <ArrowUpRight size={13} aria-hidden="true" />
+                          </a>
+                          <span className={`source-coverage-status ${source.status}`}>
+                            {
+                              {
+                                pending: 'Not checked',
+                                reading: 'Reading incomplete',
+                                extracting: 'Interaction incomplete',
+                                complete: 'Checked',
+                                failed: 'Could not check',
+                              }[source.status]
+                            }
+                          </span>
+                          <span className="source-coverage-found">
+                            {source.count} {source.count === 1 ? 'listing' : 'listings'} recorded
+                          </span>
+                        </div>
+                        {source.message && <p>{source.message}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="source-coverage-explanation">
+                    The final shortlist reflects your filters and availability checks. Broaden the
+                    search or visit the source pages to explore other openings.
+                  </p>
+                </>
+              ) : (
+                <p>No careers pages could be checked. Try again or adjust the role and location.</p>
+              )}
+            </div>
+          </details>
+        )}
       {view === 'applications' ? (
         <>
           {workspace.saved.length > 0 ? (

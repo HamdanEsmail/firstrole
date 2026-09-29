@@ -1,11 +1,12 @@
 import type { Job, PublicConfig, SearchRun } from '../shared/types';
 import { DEFAULT_PREFERENCES } from '../shared/types';
-import { AppError, databaseReady, providerReady, requireProvider, type Env } from './env';
+import { AppError, databaseReady, providerConfigured, type Env } from './env';
 import { checkOrigin, identify, pseudonym, type Owner } from './auth';
 import { Database, admissionError, type Operation } from './db';
 import { json, requestJson, safeMessage, sha256 } from './http';
 import { fingerprintInput, validatePreferences, verifyJob } from './quality';
 import { TinyFish } from './tinyfish';
+import { verifiedProviderEnv } from './rates';
 
 export { SearchWorkflow, AgentWorkflow } from './workflows';
 
@@ -73,10 +74,6 @@ async function createOwnedRun(
   ) {
     run.stage =
       'Searching directly readable sources. The browser-assisted allowance is already used today.';
-    run.errors.push({
-      message:
-        'This search checks directly readable listings; today’s browser-assisted allowance is already used.',
-    });
     result = await db.rpc('create_search_run', {
       ...parameters,
       p_assisted: false,
@@ -122,9 +119,9 @@ export default {
         const config: PublicConfig = {
           supabaseUrl: env.SUPABASE_URL || '',
           supabasePublishableKey: env.SUPABASE_PUBLISHABLE_KEY || '',
-          searchEnabled: providerReady(env),
+          searchEnabled: providerConfigured(env),
           googleEnabled: env.GOOGLE_AUTH_ENABLED === 'true' && databaseReady(env),
-          ...(!providerReady(env)
+          ...(!providerConfigured(env)
             ? {
                 setupMessage: databaseReady(env)
                   ? 'Live searches are paused while the owner checks the pilot allowance. Your saved jobs remain available.'
@@ -132,6 +129,16 @@ export default {
               }
             : {}),
         };
+        if (databaseReady(env)) {
+          // Establish guest ownership before a browser can submit paid work.
+          // Config stays public and does not need an Auth lookup, even if a
+          // caller happens to supply an expired bearer token.
+          const guestRequest = new Request(request.url, {
+            headers: { cookie: request.headers.get('cookie') || '' },
+          });
+          const guest = await identify(guestRequest, env);
+          return json(config, 200, guest.cookie ? { 'set-cookie': guest.cookie } : {});
+        }
         return json(config);
       }
       if (request.method === 'GET' && url.pathname === '/api/health') return json({ ok: true });
@@ -143,6 +150,16 @@ export default {
         );
       if (request.method !== 'GET') checkOrigin(request, env);
       owner = await identify(request, env, url.pathname === '/api/account/delete');
+      if (request.method === 'POST' && url.pathname === '/api/searches' && owner.cookie) {
+        // A cookie newly issued on this request has not been acknowledged by
+        // the browser. Do not admit any run until it returns that same cookie.
+        // Losing this handshake response therefore cannot create paid work.
+        throw new AppError(
+          'GUEST_SESSION_READY',
+          'Your browser session is ready. Repeat this request to start the search.',
+          425,
+        );
+      }
       const db = new Database(env);
       const actorKey = await pseudonym(owner.key, env);
       const headers: HeadersInit = owner.cookie ? { 'set-cookie': owner.cookie } : {};
@@ -173,7 +190,7 @@ export default {
           candidate.stage =
             'Recent results reused from the last 6 hours. Original check times are preserved.';
           candidate.cached = true;
-        } else requireProvider(env);
+        } else await verifiedProviderEnv(env, db);
         const admitted = await createOwnedRun(
           db,
           env,
@@ -231,7 +248,7 @@ export default {
             'Search again to recheck this older guest listing, or sign in and import it to your account.',
             404,
           );
-        requireProvider(env);
+        const verifiedEnv = await verifiedProviderEnv(env, db);
         const preferences = searchId ? (await db.get(searchId, actorKey))?.preferences : null;
         const run = newRun(
           preferences || {
@@ -264,7 +281,7 @@ export default {
             409,
           );
         }
-        const api = new TinyFish(env, db, admitted.run.id);
+        const api = new TinyFish(verifiedEnv, db, admitted.run.id);
         let refreshed: Job;
         try {
           refreshed = verifyJob(

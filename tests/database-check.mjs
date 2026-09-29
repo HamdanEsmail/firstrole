@@ -12,8 +12,11 @@ try {
   for (const path of [
     'tests/database-bootstrap.sql',
     'supabase/migrations/202609290001_firstrole.sql',
+    'supabase/migrations/202609290002_provider_rate_attestations.sql',
+    'supabase/migrations/202609290003_rate_clock_skew.sql',
     'tests/database-acceptance.sql',
     'tests/database-limits.sql',
+    'tests/database-rates.sql',
   ]) {
     const result = await db.exec(await readFile(path, 'utf8'));
     const messages = result.flatMap((r) => r.rows ?? []).filter((r) => r.result);

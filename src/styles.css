@@ -2555,3 +2555,148 @@ ul {
     font-size: 15px;
   }
 }
+
+/* Public privacy route shares the application's type, palette, and notice copy. */
+.privacy-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+}
+.privacy-header .wordmark {
+  text-decoration: none;
+}
+.privacy-main {
+  width: min(840px, calc(100% - 48px));
+  margin: 48px auto 72px;
+}
+.privacy-document {
+  padding: 42px 48px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.privacy-document h1 {
+  margin: 0 0 14px;
+  font-family: Manrope, sans-serif;
+  font-size: clamp(26px, 4vw, 36px);
+  line-height: 1.25;
+  letter-spacing: -0.035em;
+}
+.privacy-intro {
+  margin: 0 0 32px;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1.55;
+}
+.privacy-document .privacy-copy h2 {
+  margin: 28px 0 8px;
+  font-family: Manrope, sans-serif;
+  font-size: 19px;
+  line-height: 1.4;
+  letter-spacing: -0.02em;
+}
+.privacy-document .privacy-copy p {
+  margin: 0 0 14px;
+  color: #4c5e7b;
+  font-size: 17px;
+  line-height: 1.7;
+}
+.privacy-copy a {
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+@media (max-width: 600px) {
+  .privacy-main {
+    width: calc(100% - 28px);
+    margin-top: 24px;
+    margin-bottom: 36px;
+  }
+  .privacy-document {
+    padding: 26px 22px;
+  }
+  .privacy-header .text-button {
+    font-size: 14px;
+  }
+  .privacy-document .privacy-copy p {
+    font-size: 16px;
+  }
+}
+
+/* Completed source coverage remains available without crowding the shortlist. */
+.source-coverage {
+  margin: 0 0 17px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 14px;
+}
+.source-coverage summary {
+  padding: 12px 15px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.source-coverage summary::marker {
+  color: var(--muted);
+}
+.source-coverage-count {
+  float: right;
+  margin-left: 12px;
+  color: var(--muted);
+  font-weight: 400;
+}
+.source-coverage-content {
+  padding: 0 15px 14px;
+}
+.source-coverage-content > p {
+  margin: 0 0 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.source-coverage-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.source-coverage-list > li {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.source-coverage-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.source-coverage-row > a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-right: auto;
+  overflow-wrap: anywhere;
+}
+.source-coverage-status,
+.source-coverage-found {
+  font-size: 13px;
+  color: var(--muted);
+}
+.source-coverage-status.complete {
+  color: var(--green);
+}
+.source-coverage-status.failed {
+  color: #887247;
+}
+.source-coverage-list > li > p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.source-coverage-content > .source-coverage-explanation {
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+@media (max-width: 760px) {
+  .show-mobile-detail > .source-coverage {
+    display: none;
+  }
+}

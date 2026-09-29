@@ -2,9 +2,11 @@
 
 A job finder and application workspace for students and recent graduates. FirstRole uses TinyFish to discover public careers pages, read individual listings, and navigate portals that need interaction. It turns the results into a shortlist with source links, match reasons, and clear freshness information.
 
-**Delivery status:** the application and automated checks are implemented. Source: [HamdanEsmail/firstrole](https://github.com/HamdanEsmail/firstrole). Public deployment, live Google sign-in, and the complete live bounty demonstration still need verification. `LIVE_DEMO_URL` is a placeholder. See [verification status](docs/qa.md) and the [submission package](docs/submission.md).
+**Public demo:** [Open FirstRole](https://firstrole.hamdanesmail12-7a9.workers.dev). **Source:** [HamdanEsmail/firstrole](https://github.com/HamdanEsmail/firstrole).
 
-![FirstRole desktop interface with explicitly labelled fictional UI-test data](artifacts/screenshots/results-desktop-test.png)
+**Verified so far:** live US results from Intel, Katalyst, and Medtronic; Google sign-in and persistence; guest cache reuse and duplicate-save import; 41 real Supabase ownership checks; and deletion through the deployed Worker. The latest complete check passed 144 unit tests, all database suites, TypeScript, and the production build. Release `83c01bee-7526-4117-a991-1bfed1eaf6f4` also passed the no-spend guest-cookie handshake check. The final UAE search returned an Egis Graduate Mechanical Engineer – MEP listing with its UAE National/Family Book requirement preserved and availability clearly marked Could not verify. A successful, useful Agent interaction remains unverified. See [verification status](docs/qa.md) and the [submission package](docs/submission.md).
+
+![FirstRole live US search with verified Katalyst and Medtronic opportunities](artifacts/screenshots/live-search-us-desktop.png)
 
 ## What the app does
 
@@ -51,12 +53,12 @@ Open `http://127.0.0.1:5174` in Edge. The page carries **UI TEST · FICTIONAL LI
 
 The intended pilot uses **Cloudflare Workers/Workflows and Supabase free plans**, a free `workers.dev` address, and no additional language-model provider. No paid domain, subscription, or automatic credit top-up is required by this implementation. Confirm the selected accounts remain on their free plans before enabling a public deployment.
 
-1. Create a new Supabase project and apply `supabase/migrations/202609290001_firstrole.sql`. Read [database setup and spending controls](supabase/README.md). The isolated test bootstrap is never a production migration.
+1. Create a new Supabase project and apply all three SQL files in `supabase/migrations` in filename order. They create the workspace, budget controls, and private provider-rate cache. Read [database setup and spending controls](supabase/README.md). The isolated test bootstrap is never a production migration.
 2. Create an ignored `.dev.vars` file for local Worker configuration. Set corresponding configuration and secrets on the deployed Worker. Use the variable reference below.
 3. Configure Google OAuth using [accounts and saved workspaces](docs/accounts.md). Leave Google sign-in disabled until the real provider and redirect setup is verified. Guest access does not require Google configuration.
 4. Authenticate Cloudflare using Microsoft Edge. If a command supplies an authorization URL, open it in Edge. The checked-in Wrangler configuration declares the static assets, API Worker, and two durable Workflows.
 5. After the configuration and free-plan checks, run `npm run deploy`. Set the resulting HTTPS origin as `APP_ORIGIN` and allow its exact sign-in return URL in Supabase. Run the deployed acceptance checks before publishing a demo link.
-6. Verify TinyFish rates, the provider's maximum execution exposure, and the remaining allowance before enabling live search. Set the verified timestamp only after checking the actual account. Recheck before the timestamp expires.
+6. Verify the provider's maximum execution exposure and remaining allowance before enabling live search. The server verifies account-specific TinyFish rates through the documented wallet metadata endpoint and refreshes its private proof when the six-hour cache expires. Missing or increased rates pause new paid work; no daily configuration change or redeployment is required.
 
 Use an ignored `.dev.vars` file with these names; replace placeholders locally:
 
@@ -70,24 +72,27 @@ APP_ORIGIN=http://127.0.0.1:5173
 GOOGLE_AUTH_ENABLED=false
 TINYFISH_ENABLED=false
 TINYFISH_RATES_VERIFIED_AT=
+TINYFISH_RATES_KEY_SHA256=
 TINYFISH_AGENT_RATE=0.016
 TINYFISH_SEARCH_RATE=0.005
 TINYFISH_FETCH_RATE=0.001
 ```
 
-| Variable                                                             | Purpose                                                                                            |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`                           | Public connection settings supplied to the browser through `/api/config`.                          |
-| `SUPABASE_SERVICE_ROLE_KEY`                                          | Worker-only database orchestration and account deletion. Store as a secret.                        |
-| `GUEST_COOKIE_SECRET`                                                | Worker-only random signing secret for guest identity and usage pseudonyms.                         |
-| `TINYFISH_API_KEY`                                                   | Worker-only provider credential. Never include it in frontend build variables.                     |
-| `APP_ORIGIN`                                                         | Exact frontend origin used for request-origin checks.                                              |
-| `GOOGLE_AUTH_ENABLED`                                                | Enables the Google sign-in UI after configuration.                                                 |
-| `TINYFISH_ENABLED`                                                   | Explicitly enables paid provider work when the other readiness checks pass.                        |
-| `TINYFISH_RATES_VERIFIED_AT`                                         | ISO timestamp for the owner's latest rate/exposure verification. Live calls pause after 24 hours.  |
-| `TINYFISH_AGENT_RATE`, `TINYFISH_SEARCH_RATE`, `TINYFISH_FETCH_RATE` | Verified rates checked against conservative ceilings of $0.016/step, $0.005/query, and $0.001/URL. |
+| Variable                                                             | Purpose                                                                                                                                                               |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`                           | Public connection settings supplied to the browser through `/api/config`.                                                                                             |
+| `SUPABASE_SERVICE_ROLE_KEY`                                          | Worker-only database orchestration and account deletion. Store as a secret.                                                                                           |
+| `GUEST_COOKIE_SECRET`                                                | Worker-only random signing secret for guest identity and usage pseudonyms.                                                                                            |
+| `TINYFISH_API_KEY`                                                   | Worker-only provider credential. Never include it in frontend build variables.                                                                                        |
+| `APP_ORIGIN`                                                         | Exact frontend origin used for request-origin checks.                                                                                                                 |
+| `GOOGLE_AUTH_ENABLED`                                                | Enables the Google sign-in UI after configuration.                                                                                                                    |
+| `TINYFISH_ENABLED`                                                   | Explicitly enables paid provider work when the other readiness checks pass.                                                                                           |
+| `TINYFISH_RATES_VERIFIED_AT`, `TINYFISH_RATES_KEY_SHA256`            | Optional initial manual proof: a UTC timestamp at most 24 hours old, bound to the current API key's SHA-256. When unset, rates are verified automatically at runtime. |
+| `TINYFISH_AGENT_RATE`, `TINYFISH_SEARCH_RATE`, `TINYFISH_FETCH_RATE` | Initial manual rates. Runtime wallet proofs validate exact USD meters and units against ceilings of $0.016/step, $0.005/query, and $0.001/URL.                        |
 
 Use Cloudflare secrets for the service-role key, TinyFish key, and guest-cookie secret. The Google OAuth client secret belongs in Supabase's provider settings. Do not commit secret values or copy them into screenshots, logs, or submission materials.
+
+Automatic rate proofs are private, expire after six hours, and are keyed by the API key's hash. The wallet metadata read cannot start an Agent, buy credits, reset the $10 pilot ledger, or change reserved charges. Invalid, unavailable, or excessive rates fail closed for new paid work while saved and cached job results remain usable. See [database rate verification](supabase/README.md#automatic-provider-rate-verification).
 
 ## How live discovery works
 
@@ -110,6 +115,8 @@ The database starts with a **$10 lifetime envelope** for the approved implementa
 
 Each provider call requires an atomic database reservation and a unique dispatch claim. Search reserves $0.005/query, Fetch reserves $0.001/URL, and Agent reserves $2.50/start. Unknown Agent costs remain reserved until authoritative reconciliation. Terminal status can release a concurrency slot without releasing the financial reservation. A duration limit alone is not the spending cap.
 
+At the last reported pilot-ledger check, the lifetime limit was **$10**, recorded spend was **$0.135**, and **$5 remained reserved** for two terminal Agent attempts that produced no usable jobs. Those holds have not been treated as refunds. This is a recorded snapshot, not a live balance or proof of final provider billing; preserve the reservations until authoritative charges can be reconciled.
+
 The current defaults allow two simultaneous Agents globally, one per source hostname, four Agent starts per UTC day, and one assisted search per actor per day. Separate guest/account/network limits protect the shared allowance. The lifetime envelope takes precedence over these daily limits. Saved jobs and eligible cached searches remain available when paid work is paused.
 
 See [database limits and reconciliation](supabase/README.md#limits-and-reconciliation) for the exact admission rules, pause control, and operator responsibilities.
@@ -126,7 +133,7 @@ See [database limits and reconciliation](supabase/README.md#limits-and-reconcili
 | `POST /api/jobs/:id/refresh`    | Rechecks a previously authorized listing; accepts optional `{ searchId }`.                                  |
 | `POST /api/account/delete`      | Deletes the verified user's FirstRole account and personal records. Requires an authenticated bearer token. |
 
-Guest API access uses an HttpOnly signed cookie. Account access uses a Supabase bearer token verified by the Worker. Browser account tables enforce row ownership through PostgreSQL policies. Refresh destinations come from server-verified job records; a browser-edited saved snapshot cannot choose an arbitrary URL.
+Guest API access uses an HttpOnly signed cookie. Configuration establishes that cookie when possible. A first search that needs a new cookie receives a no-spend `425 GUEST_SESSION_READY` response; the client repeats it once with the same idempotency key. Admission begins only after the browser returns its signed cookie. If cookies are blocked, the client stops with a clear message instead of repeatedly starting work. Account access uses a Supabase bearer token verified by the Worker. Browser account tables enforce row ownership through PostgreSQL policies. Refresh destinations come from server-verified job records; a browser-edited saved snapshot cannot choose an arbitrary URL.
 
 `src` contains the React interface and account client. `server` contains the Worker, Workflows, TinyFish adapter, and job-quality rules. `shared` defines the typed contracts. `supabase` contains the migration and database operating notes. `tests` contains unit, isolated database, and explicitly separated UI fixtures.
 
@@ -134,4 +141,4 @@ Guest API access uses an HttpOnly signed cookie. Account access uses a Supabase 
 
 Automated tests cover extraction and matching, missing fields, closure evidence, deduplication, provider request bounds, unknown Agent outcomes, ownership policies, private RPC permissions, spending limits, retry claims, guest imports, and account API behavior. The current evidence and its limits are recorded in [QA](docs/qa.md).
 
-Before calling the bounty complete, verify the deployed demo in Edge with real opportunities from multiple companies, roles, and at least two regions. Demonstrate a necessary Agent interaction, Google sign-in across two sessions, account isolation, and the shared budget under concurrent requests. Verify free-plan execution limits and restore a paused Supabase project if needed. Add real demo/repository links, screenshots, and a short walkthrough to the [submission package](docs/submission.md).
+Multiple-employer US results are verified: the corrected fresh search returned open Katalyst and Medtronic roles, alongside the earlier Intel result. The final UAE search returned an Egis Graduate Mechanical Engineer – MEP listing in Dubai, with its UAE National/Family Book requirement preserved. That search is partial because a source was blocked, and Egis availability is explicitly Could not verify; it is not presented as a confirmed open role. Earlier UAE engineering and Finance/Dubai empty results remain recorded. The outstanding endpoint acceptance check is a successful, useful Agent interaction under the normal daily allowance; no reset or bypass is planned. Simultaneous budget-admission checks and CPU headroom measurement also remain open. Cache reuse, guest import, sign-out isolation, deployed refresh, account ownership, and deletion have evidence. Finish the walkthrough and review the unpublished [submission package](docs/submission.md).
