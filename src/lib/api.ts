@@ -1,4 +1,10 @@
-import type { Job, PublicConfig, SearchPreferences, SearchRun } from '../../shared/types';
+import type {
+  AgentPreview,
+  Job,
+  PublicConfig,
+  SearchPreferences,
+  SearchRun,
+} from '../../shared/types';
 
 export class ApiError extends Error {
   constructor(
@@ -172,6 +178,10 @@ export async function startSearch(
 }
 export const getSearch = (id: string, token: string | null = null) =>
   request<SearchRun>(`/api/searches/${encodeURIComponent(id)}`, token);
+export const getAgentPreview = (id: string, token: string | null = null) =>
+  request<AgentPreview>(`/api/searches/${encodeURIComponent(id)}/preview`, token, {
+    cache: 'no-store',
+  });
 export const cancelSearch = (id: string, token: string | null = null) =>
   request<SearchRun>(`/api/searches/${encodeURIComponent(id)}/cancel`, token, { method: 'POST' });
 export const refreshJob = (id: string, token: string | null = null, searchId?: string) =>

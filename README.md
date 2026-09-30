@@ -71,6 +71,9 @@ TINYFISH_API_KEY=REPLACE_WITH_TINYFISH_SECRET
 APP_ORIGIN=http://127.0.0.1:5173
 GOOGLE_AUTH_ENABLED=false
 TINYFISH_ENABLED=false
+TINYFISH_MAX_STEPS_ENABLED=false
+TINYFISH_OUTPUT_SCHEMA_ENABLED=false
+TINYFISH_REPORTED_USAGE_ENABLED=true
 TINYFISH_RATES_VERIFIED_AT=
 TINYFISH_RATES_KEY_SHA256=
 TINYFISH_AGENT_RATE=0.016
@@ -87,12 +90,15 @@ TINYFISH_FETCH_RATE=0.001
 | `APP_ORIGIN`                                                         | Exact frontend origin used for request-origin checks.                                                                                                                 |
 | `GOOGLE_AUTH_ENABLED`                                                | Enables the Google sign-in UI after configuration.                                                                                                                    |
 | `TINYFISH_ENABLED`                                                   | Explicitly enables paid provider work when the other readiness checks pass.                                                                                           |
+| `TINYFISH_MAX_STEPS_ENABLED`                                         | The pilot sets `false`: use standard Agent execution with a $2.50 reservation and omit the beta-only `max_steps` parameter. Set `true` only for an account with verified beta access to the 20-step/$0.35 path. |
+| `TINYFISH_OUTPUT_SCHEMA_ENABLED`                                     | The pilot sets `false` to omit beta-gated `output_schema`; the goal still supplies the JSON schema and returned data is validated. |
+| `TINYFISH_REPORTED_USAGE_ENABLED`                                    | Owner-enabled terminal reported-usage reconciliation. Matching run identity, valid steps, known dispatch cap, and a fresh verified rate are required before unused funds are released. |
 | `TINYFISH_RATES_VERIFIED_AT`, `TINYFISH_RATES_KEY_SHA256`            | Optional initial manual proof: a UTC timestamp at most 24 hours old, bound to the current API key's SHA-256. When unset, rates are verified automatically at runtime. |
 | `TINYFISH_AGENT_RATE`, `TINYFISH_SEARCH_RATE`, `TINYFISH_FETCH_RATE` | Initial manual rates. Runtime wallet proofs validate exact USD meters and units against ceilings of $0.016/step, $0.005/query, and $0.001/URL.                        |
-| `OPENROUTER_ENABLED`, `OPENROUTER_API_KEY` | Optional server-only Gemma extraction. Use a dedicated key with a $1 total limit and no resetting allowance. |
-| `OPENROUTER_PROVIDER` | One pinned, allowlisted host for the fixed Gemma model. The pilot uses `nextbit/bf16`; runtime verifies its schema support and rates. |
-| `FIRECRAWL_ENABLED`, `FIRECRAWL_API_KEY` | Optional server-only recovery of empty or JavaScript-shell detail pages after TinyFish. |
-| `FIRECRAWL_FREE_PLAN_VERIFIED_AT`, `FIRECRAWL_FREE_PLAN_KEY_SHA256` | Owner-confirmed free-plan timestamp and key fingerprint. Expires after 30 days; a paid-sized allowance or exhausted credits disables recovery. |
+| `OPENROUTER_ENABLED`, `OPENROUTER_API_KEY`                           | Optional server-only Gemma extraction. Use a dedicated key with a $1 total limit and no resetting allowance.                                                          |
+| `OPENROUTER_PROVIDER`                                                | One pinned, allowlisted host for the fixed Gemma model. The pilot uses `nextbit/bf16`; runtime verifies its schema support and rates.                                 |
+| `FIRECRAWL_ENABLED`, `FIRECRAWL_API_KEY`                             | Optional server-only recovery of empty or JavaScript-shell detail pages after TinyFish.                                                                               |
+| `FIRECRAWL_FREE_PLAN_VERIFIED_AT`, `FIRECRAWL_FREE_PLAN_KEY_SHA256`  | Owner-confirmed free-plan timestamp and key fingerprint. Expires after 30 days; a paid-sized allowance or exhausted credits disables recovery.                        |
 
 Use Cloudflare secrets for the service-role key, TinyFish key, and guest-cookie secret. The Google OAuth client secret belongs in Supabase's provider settings. Do not commit secret values or copy them into screenshots, logs, or submission materials.
 
@@ -107,13 +113,17 @@ Automatic rate proofs are private, expire after six hours, and are keyed by the 
 | Interact | **Agent** searches or filters an employer site only when ordinary reading is insufficient.                       | One Agent execution per eligible assisted search, a 120-second execution setting, and one extracted opening.    |
 | Verify   | **Fetch** checks the new Agent-produced opening on its original page.                                            | At most one read; already-open results from earlier Fetch calls are not rechecked just to exercise an endpoint. |
 
-The schema fallback is allowed only after a conclusive pre-execution schema-access rejection. An uncertain submission is never automatically resubmitted. The second Workflow handles the Agent lifecycle independently of an open browser.
+The pilot sets `TINYFISH_MAX_STEPS_ENABLED=false` because `max_steps` requires account beta access. It starts a standard Agent request with a **$2.50 reservation**, omits that beta parameter, and uses the documented default maximum of 150 steps with a 120-second execution setting. When the run ends with valid reported-usage evidence, the enabled accounting policy records its reported cost and automatically releases the unused reservation. Unknown exposure remains held.
+
+For an account with verified beta access, `TINYFISH_MAX_STEPS_ENABLED=true` enables a separate **20-step/$0.35** path. Only a conclusive pre-execution rejection can release an unused bounded reservation and select a separately admitted standard request. The app never omits the step limit while relying on the smaller hold. The pilot also disables beta-gated `output_schema`; the goal still supplies the JSON schema and the server validates the result. If schema mode is enabled, only a conclusive schema-access rejection can omit it. Generic errors and uncertain submissions are never automatically resubmitted.
 
 An optional third Workflow checks difficult posting details **after TinyFish's reading and any eligible Agent work**. It can recover an empty detail page with a basic Firecrawl scrape, or ask `google/gemma-4-26b-a4b-it` through a pinned, allowlisted OpenRouter endpoint to extract facts from already-read public text. Exact source excerpts are required; identifiers and application destinations remain server-controlled. It does not receive account data, application notes or search preferences. The existing parser remains the fallback.
 
 The two optional providers share a maximum of two dispatches per search. Separate atomic ledgers enforce $1 total OpenRouter spend and 100 free Firecrawl reads for the pilot. Unknown charges retain their reservations, submissions have no automatic retries, and the TinyFish $10 ledger is unchanged. OpenRouter rates and structured-output support are checked against its official endpoint metadata; price increases beyond the configured ceiling disable model work. See [optional provider setup](docs/deployment.md#optional-detail-helpers).
 
-The pilot allows up to eight minutes for provider startup and completion through eight scheduled status reads, sixty seconds apart. Database cancellation checks occur every thirty seconds, and the Cancel action also requests provider cancellation directly. This waiting allowance does not raise the 120-second provider execution setting or the $2.50 reservation. If cancellation races with successful completion, the existing result is retrieved without another submission. Known aggregators, explicit missing-page shells, and employer portals already covered by verified followup results are excluded from Agent selection.
+The pilot allows up to eight minutes for provider startup and completion through eight scheduled status reads, sixty seconds apart. The Cancel action requests provider cancellation immediately; a midpoint database check provides a backup at most sixty seconds later. The provider execution setting remains 120 seconds. If cancellation races with completion, the existing result is retrieved without another submission. Known aggregators, explicit missing-page shells, and employer portals already covered by verified followup results are excluded from Agent selection.
+
+While an owned search is actively extracting, a separate no-store endpoint can provide TinyFish's read-only browser viewer. The allowlist accepts the documented `tf-<id>.<region>-tinyfish.unikraft.app/stream/<number>` namespace and the observed production `ip-<a>-<b>-<c>-<d>.tetra-data.production.tinyfish.io/tf-<UUID>/stream/<number>` namespace, with HTTPS and strict host/path validation. The temporary viewing URL is never added to search results, saved history or shared caches, and the viewer is removed when the active search or owner changes. Preview metadata does not add requests to the Agent Workflow. A viewer may expire when its provider session ends.
 
 Structured jobs retain source and application URLs, requisition identifiers, salary units, dates, geographic restrictions, and supporting text when available. Deduplication prioritizes employer/requisition identity and canonical URLs. Matching applies the chosen requirements and ranks relevant jobs with understandable reasons rather than an invented hiring probability.
 
@@ -125,7 +135,7 @@ Completed search and cache reads incorporate newer server-owned job facts, then 
 
 The default deployment has a **$10 lifetime search budget**. All provider dispatches share that limit. If setup calls are made outside the application ledger, include those costs when setting the remaining deployment allowance.
 
-Each provider call requires an atomic database reservation and a unique dispatch claim. Search reserves $0.005/query, Fetch reserves $0.001/URL, and Agent reserves $2.50/start. Unknown Agent costs remain reserved until authoritative reconciliation. Terminal status can release a concurrency slot without releasing the financial reservation. A duration limit alone is not the spending cap.
+Each provider call requires an atomic database reservation and a unique dispatch claim. Search reserves $0.005/query and Fetch reserves $0.001/URL. The pilot's standard Agent mode reserves $2.50 while execution is active or its cost remains uncertain; the optional beta-enabled 20-step mode reserves $0.35. The owner-enabled reported-usage policy reconciles a terminal run's valid step count times its fresh verified rate and automatically releases the unused buffer. These amounts use reported usage, not final invoice evidence. Missing, mismatched or ambiguous observations retain the hold. Terminal status can release a concurrency slot independently of financial reconciliation. The lifetime $10 cap is unchanged.
 
 The current defaults allow two simultaneous Agents globally, one per source hostname, four Agent starts per UTC day, and one assisted search per actor per day. Separate guest/account/network limits protect the shared allowance. The lifetime envelope takes precedence over these daily limits. Saved jobs and eligible cached searches remain available when paid work is paused.
 

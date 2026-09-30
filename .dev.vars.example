@@ -7,6 +7,9 @@ GUEST_COOKIE_SECRET=""
 APP_ORIGIN="http://localhost:8787"
 TINYFISH_API_KEY=""
 TINYFISH_ENABLED="false"
+TINYFISH_OUTPUT_SCHEMA_ENABLED="false"
+TINYFISH_MAX_STEPS_ENABLED="false"
+TINYFISH_REPORTED_USAGE_ENABLED="true"
 # Optional initial manual proof; runtime wallet metadata verifies rates automatically
 # when unset. Private automatic proofs last six hours and never reset the pilot budget.
 # A manual UTC timestamp is valid for at most 24 hours and requires the current

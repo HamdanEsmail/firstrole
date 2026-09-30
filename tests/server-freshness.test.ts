@@ -272,14 +272,12 @@ describe('HTTP freshness presentation', () => {
     const sessionCookie = await cookie(env);
     const original = run();
     const rpc = vi.spyOn(Database.prototype, 'rpc').mockResolvedValue(original);
-    const catalog = vi
-      .spyOn(Database.prototype, 'latestVerifiedJobs')
-      .mockResolvedValue([
-        job({
-          checkedAt: newCheck,
-          salary: { text: 'USD 25/hour', currency: 'USD', period: 'hour' },
-        }),
-      ]);
+    const catalog = vi.spyOn(Database.prototype, 'latestVerifiedJobs').mockResolvedValue([
+      job({
+        checkedAt: newCheck,
+        salary: { text: 'USD 25/hour', currency: 'USD', period: 'hour' },
+      }),
+    ]);
     const outbound = vi.fn();
     vi.stubGlobal('fetch', outbound);
     const response = await worker.fetch(
@@ -308,6 +306,48 @@ describe('HTTP freshness presentation', () => {
     );
     expect(response.status).toBe(404);
     expect(catalog).not.toHaveBeenCalled();
+  });
+
+  it('scopes old source-budget warnings without changing stored data or hiding whole-budget failures', async () => {
+    const env = environment();
+    const sessionCookie = await cookie(env);
+    const legacy =
+      'The public pilot has reached its spending limit. Saved and cached results are still available.';
+    const original = run({
+      status: 'partial',
+      sources: [
+        { url: job().sourceUrl, name: 'Example', status: 'failed', count: 0, message: legacy },
+      ],
+      errors: [
+        { source: job().sourceUrl, message: legacy },
+        { message: legacy },
+        { source: 'https://example.org', message: 'Source unavailable.' },
+      ],
+    });
+    const before = structuredClone(original);
+    const rpc = vi.spyOn(Database.prototype, 'rpc').mockResolvedValue(original);
+    vi.spyOn(Database.prototype, 'latestVerifiedJobs').mockResolvedValue([]);
+    const outbound = vi.fn();
+    vi.stubGlobal('fetch', outbound);
+    const response = await worker.fetch(
+      new Request(`${origin}/api/searches/${original.id}`, {
+        headers: { cookie: sessionCookie },
+      }),
+      env,
+    );
+    const body = (await response.json()) as SearchRun;
+    expect(response.status).toBe(200);
+    expect(body.errors[0].message).toContain('This source check was unavailable');
+    expect(body.errors[0].message).toContain('No payment is needed');
+    expect(body.sources[0].message).toBe(body.errors[0].message);
+    expect(body.errors[1].message).toBe(legacy);
+    expect(body.errors[2].message).toBe('Source unavailable.');
+    expect(body.results.map(({ match: _match, ...facts }) => facts)).toEqual(
+      original.results.map(({ match: _match, ...facts }) => facts),
+    );
+    expect(original).toEqual(before);
+    expect(rpc.mock.calls.map(([name]) => name)).toEqual(['get_search_run']);
+    expect(outbound).not.toHaveBeenCalled();
   });
 
   it('hydrates a cached POST after SQL returns the original cached payload, without extending its expiry or starting providers', async () => {

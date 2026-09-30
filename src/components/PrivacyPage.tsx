@@ -32,6 +32,11 @@ export function PrivacyNoticeContent({ headingLevel = 'h2' }: PrivacyNoticeConte
         TinyFish as part of a job search.
       </p>
       <p>
+        During a TinyFish Agent session, an optional view-only preview connects your browser to
+        TinyFish’s live viewer. Its temporary viewing link is shown only for your current active
+        search and is not included in shared search results or saved jobs.
+      </p>
+      <p>
         Cloudflare hosts FirstRole and handles application requests. Search progress and results are
         stored so you can resume a search. Public job results may be reused for up to six hours with
         their original check times; your private notes are not included in those shared results.

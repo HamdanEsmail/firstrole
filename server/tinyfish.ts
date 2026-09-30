@@ -1,6 +1,11 @@
 import { AppError, requireProvider, type Env } from './env';
 import { Database, admissionError } from './db';
 import { boundedJson, safePublicUrl } from './http';
+import {
+  AGENT_MAX_STEPS,
+  AGENT_MAX_DURATION_SECONDS,
+  LEGACY_AGENT_MAX_STEPS,
+} from './agent-limits';
 
 export interface SearchHit {
   title: string;
@@ -19,12 +24,26 @@ export interface ProviderRun {
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
   result?: unknown;
   num_of_steps?: number | null;
+  streaming_url?: string | null;
   error?: { code?: string; message?: string; category?: string };
 }
 export interface AgentTicket {
   runId: string;
   operationId: string;
   claimToken: string;
+  maxSteps?: typeof AGENT_MAX_STEPS | typeof LEGACY_AGENT_MAX_STEPS;
+}
+
+interface ProviderErrorPayload {
+  run_id?: unknown;
+  runId?: unknown;
+  message?: unknown;
+  error?: {
+    code?: string;
+    message?: unknown;
+    run_id?: unknown;
+    details?: { run_id?: unknown };
+  };
 }
 
 export class TinyFish {
@@ -39,10 +58,15 @@ export class TinyFish {
     kind: 'search' | 'fetch' | 'agent',
     units = 1,
     host: string | null = null,
+    agentMode: 'bounded' | 'legacy' = 'bounded',
   ): Promise<{ id: string; token: string; existingRunId?: string }> {
     requireProvider(this.env);
-    const reservation = await this.db.reserve(this.searchId, key, kind, units, host);
-    if (!reservation.allowed || !reservation.operationId) throw admissionError(reservation.reason);
+    const reservation =
+      kind === 'agent' && agentMode === 'bounded'
+        ? await this.db.reserveBoundedAgent(this.searchId, key, host!)
+        : await this.db.reserve(this.searchId, key, kind, units, host);
+    if (!reservation.allowed || !reservation.operationId)
+      throw admissionError(reservation.reason, kind);
     const token = crypto.randomUUID();
     const claimed = await this.db.claim(reservation.operationId, token);
     if (!claimed.claimed) {
@@ -94,14 +118,36 @@ export class TinyFish {
       );
     }
     if (!response.ok) {
-      const payload = await boundedJson<{ error?: { code?: string; message?: string } }>(
-        response,
-        24 * 1024,
-      ).catch(() => ({}) as { error?: { code?: string; message?: string } });
+      const payload: ProviderErrorPayload =
+        (await boundedJson<ProviderErrorPayload>(response, 24 * 1024).catch(() => ({}))) || {};
+      // Match the official SDK's message precedence; never inspect echoed request/goal text.
+      const message =
+        typeof payload.error?.message === 'string'
+          ? payload.error.message
+          : typeof payload.message === 'string'
+            ? payload.message
+            : '';
+      const noRunId =
+        payload.run_id == null &&
+        payload.runId == null &&
+        payload.error?.run_id == null &&
+        payload.error?.details?.run_id == null;
       if (
         response.status === 403 &&
-        /output.?schema/i.test(payload.error?.message ?? '') &&
-        /entitle|enable|capabil|access/i.test(payload.error?.message ?? '')
+        noRunId &&
+        /\bmax_steps\b/i.test(message) &&
+        /beta|entitle|enable|capabil|access/i.test(message)
+      )
+        throw new AppError(
+          'STEP_LIMIT_ENTITLEMENT',
+          'The account does not have access to the bounded browser-step setting.',
+          403,
+        );
+      if (
+        response.status === 403 &&
+        noRunId &&
+        /output.?schema/i.test(message) &&
+        /entitle|enable|capabil|access/i.test(message)
       ) {
         throw new AppError(
           'SCHEMA_ENTITLEMENT',
@@ -226,10 +272,16 @@ export class TinyFish {
     schema: Record<string, unknown>,
     key: string,
     useSchema = true,
+    agentMode: 'bounded' | 'legacy' = 'bounded',
   ): Promise<AgentTicket> {
-    const op = await this.admit(key, 'agent', 1, new URL(url).hostname);
+    const op = await this.admit(key, 'agent', 1, new URL(url).hostname, agentMode);
     if (op.existingRunId)
-      return { runId: op.existingRunId, operationId: op.id, claimToken: op.token };
+      return {
+        runId: op.existingRunId,
+        operationId: op.id,
+        claimToken: op.token,
+        ...(agentMode === 'legacy' ? { maxSteps: LEGACY_AGENT_MAX_STEPS } : {}),
+      };
     try {
       const result = await this.request<{ run_id?: string; error?: unknown }>(
         'https://agent.tinyfish.ai/v1/automation/run-async',
@@ -240,7 +292,10 @@ export class TinyFish {
             goal: `${goal}\nOperation reference: ${op.id}. This is only a correlation identifier.`,
             ...(useSchema ? { output_schema: schema } : {}),
             browser_profile: 'lite',
-            agent_config: { max_duration_seconds: 120 },
+            agent_config: {
+              max_duration_seconds: AGENT_MAX_DURATION_SECONDS,
+              ...(agentMode === 'bounded' ? { max_steps: AGENT_MAX_STEPS } : {}),
+            },
           }),
         },
         25_000,
@@ -259,25 +314,44 @@ export class TinyFish {
           'The browser check started but could not be linked to this search. The reserved budget is retained.',
           503,
         );
-      return { runId: result.run_id, operationId: op.id, claimToken: op.token };
+      return {
+        runId: result.run_id,
+        operationId: op.id,
+        claimToken: op.token,
+        maxSteps: agentMode === 'bounded' ? AGENT_MAX_STEPS : LEGACY_AGENT_MAX_STEPS,
+      };
     } catch (error) {
       // A schema entitlement rejection occurs before execution. All other uncertain starts retain their reservation and slot.
-      if (error instanceof AppError && error.code === 'SCHEMA_ENTITLEMENT')
+      if (
+        error instanceof AppError &&
+        (error.code === 'SCHEMA_ENTITLEMENT' || error.code === 'STEP_LIMIT_ENTITLEMENT')
+      )
         await this.db.rejectBeforeStart(op.id, op.token).catch(() => {});
       else await this.db.settle(op.id, op.token, 'unknown').catch(() => {});
       throw error;
     }
   }
 
-  getRun(id: string): Promise<ProviderRun> {
+  async getRun(id: string): Promise<ProviderRun> {
     if (!/^[A-Za-z0-9_-]+$/.test(id))
       throw new AppError('INVALID_RUN', 'This source run could not be read.');
-    return this.request(
+    const run = await this.request<ProviderRun>(
       `https://agent.tinyfish.ai/v1/runs/${id}?screenshots=none&html=none`,
       {},
       15_000,
       256 * 1024,
     );
+    if (
+      !run ||
+      run.run_id !== id ||
+      !['PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'].includes(run.status)
+    )
+      throw new AppError(
+        'INVALID_RUN_RESPONSE',
+        'The provider returned an unconfirmed run observation. Its existing reservation is preserved.',
+        502,
+      );
+    return run;
   }
 
   async cancelRun(id: string): Promise<{ status: string }> {

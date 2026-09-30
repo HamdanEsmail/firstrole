@@ -15,6 +15,12 @@ export interface Env {
   SUPABASE_SERVICE_ROLE_KEY?: string;
   TINYFISH_API_KEY?: string;
   TINYFISH_ENABLED?: string;
+  /** Explicit false omits beta-gated output_schema while keeping the schema in the Agent goal. */
+  TINYFISH_OUTPUT_SCHEMA_ENABLED?: string;
+  /** Explicit false selects the separately funded legacy mode for accounts without max_steps beta access. */
+  TINYFISH_MAX_STEPS_ENABLED?: string;
+  /** User-approved terminal num_of_steps × verified rate policy; absent/invalid evidence retains holds. */
+  TINYFISH_REPORTED_USAGE_ENABLED?: string;
   TINYFISH_RATES_VERIFIED_AT?: string;
   /** Optional binding for an initial, manually verified rate proof. */
   TINYFISH_RATES_KEY_SHA256?: string;

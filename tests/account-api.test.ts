@@ -1,9 +1,24 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_PREFERENCES } from '../shared/types';
-import { ApiError, getSearch, startSearch } from '../src/lib/api';
+import { ApiError, getAgentPreview, getSearch, startSearch } from '../src/lib/api';
 
 afterEach(() => vi.unstubAllGlobals());
 describe('API authentication and search retry safety', () => {
+  it('requests the owner-scoped preview without caching or putting credentials in its URL', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ status: 'waiting' })));
+    vi.stubGlobal('fetch', fetchMock);
+    await getAgentPreview('private/search', 'test-preview-token');
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/searches/private%2Fsearch/preview');
+    expect(options.cache).toBe('no-store');
+    expect(options.credentials).toBe('same-origin');
+    expect(options.method).toBeUndefined();
+    expect(options.body).toBeUndefined();
+    expect(new Headers(options.headers).get('Authorization')).toBe('Bearer test-preview-token');
+    expect(url).not.toContain('test-preview-token');
+  });
   it('uses HttpOnly guest cookies without sending a fabricated account identity', async () => {
     const fetchMock = vi
       .fn()

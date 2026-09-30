@@ -87,6 +87,12 @@ export interface PublicConfig {
   googleEnabled: boolean;
   setupMessage?: string;
 }
+/** Ephemeral response from the owned active-search preview endpoint; never part of SearchRun. */
+export interface AgentPreview {
+  status: 'waiting' | 'live' | 'unavailable' | 'ended';
+  url?: string;
+  sourceName?: string;
+}
 export const DEFAULT_PREFERENCES: SearchPreferences = {
   role: '',
   location: '',

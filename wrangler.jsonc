@@ -34,6 +34,9 @@
   },
   "vars": {
     "TINYFISH_ENABLED": "true",
+    "TINYFISH_OUTPUT_SCHEMA_ENABLED": "false",
+    "TINYFISH_MAX_STEPS_ENABLED": "false",
+    "TINYFISH_REPORTED_USAGE_ENABLED": "true",
     "GOOGLE_AUTH_ENABLED": "true",
     "SUPABASE_URL": "https://abhfpenjfdxvzbjodkqj.supabase.co",
     "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_muBuQF2dWZM_B-Y1KjNWvg_X4WN0mUq",

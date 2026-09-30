@@ -22,6 +22,8 @@ import type { Job, PublicConfig, SavedJob, SearchPreferences, SearchRun } from '
 import { SearchForm } from './SearchForm';
 import { ApplicationCard, JobDetail, JobRow, timeAgo } from './Jobs';
 import type { WorkspaceUser, WorkspaceView } from './AppChrome';
+import { AgentPreview } from './AgentPreview';
+import { canShowAgentPreview } from '../lib/agent-preview';
 
 export interface SearchPreset {
   role: string;
@@ -35,6 +37,7 @@ interface ContentWorkspace {
   error: string | null;
   guestImportCount: number;
   syncing: boolean;
+  accessToken: string | null;
   clearError: () => void;
   importGuest: () => Promise<boolean>;
   dismissImport: () => void;
@@ -278,6 +281,14 @@ export function WorkspaceContent({
                 </span>
               ))}
             </div>
+          )}
+          {canShowAgentPreview(run, workspaceReady, starting) && (
+            <AgentPreview
+              key={`${scope}:${run.id}`}
+              searchId={run.id}
+              accessToken={workspace.accessToken}
+              online={online}
+            />
           )}
         </section>
       )}

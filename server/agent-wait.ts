@@ -8,6 +8,8 @@ export interface AgentObservation {
   resultText: string;
   cancelledByUser: boolean;
   timedOut: boolean;
+  observedRunId: string | null;
+  numOfSteps: number | null;
 }
 
 export interface AgentWaitIO {
@@ -16,6 +18,7 @@ export interface AgentWaitIO {
   cancellationRequested(): Promise<boolean>;
   read(): Promise<ProviderRun>;
   cancel(): Promise<{ status: string }>;
+  readTerminalUsage?: boolean;
 }
 
 export function isTerminalAgentStatus(status: string): boolean {
@@ -27,21 +30,38 @@ const waiting = (): AgentObservation => ({
   resultText: 'null',
   cancelledByUser: false,
   timedOut: false,
+  observedRunId: null,
+  numOfSteps: null,
 });
 const observation = (run: ProviderRun): AgentObservation => ({
   status: run.status,
   resultText: JSON.stringify(run.result ?? null),
   cancelledByUser: false,
   timedOut: false,
+  observedRunId: typeof run.run_id === 'string' ? run.run_id : null,
+  numOfSteps:
+    typeof run.num_of_steps === 'number' && Number.isFinite(run.num_of_steps)
+      ? run.num_of_steps
+      : null,
 });
 
 export async function waitForAgent(io: AgentWaitIO): Promise<AgentObservation> {
-  const requestedStop = async (): Promise<AgentObservation> => ({
-    status: (await io.cancel()).status,
-    resultText: 'null',
-    cancelledByUser: true,
-    timedOut: false,
-  });
+  const stoppedObservation = async (
+    status: string,
+    cancelledByUser: boolean,
+  ): Promise<AgentObservation> => {
+    if (io.readTerminalUsage && isTerminalAgentStatus(status)) {
+      try {
+        const run = await io.read();
+        if (isTerminalAgentStatus(run.status))
+          return { ...observation(run), resultText: 'null', cancelledByUser };
+      } catch {
+        /* No reported count means the existing reservation remains held. */
+      }
+    }
+    return { ...waiting(), status, cancelledByUser };
+  };
+  const requestedStop = async () => stoppedObservation((await io.cancel()).status, true);
   for (let i = 0; i < AGENT_WAIT_CYCLES; i++) {
     await io.sleep(`wait-agent-midpoint-${i}`, AGENT_HALF_INTERVAL_SECONDS);
     const midpoint = await io.checkpoint(`check-agent-cancel-${i}`, async () =>
@@ -50,7 +70,8 @@ export async function waitForAgent(io: AgentWaitIO): Promise<AgentObservation> {
     if (midpoint.cancelledByUser) return midpoint;
     await io.sleep(`wait-agent-poll-${i}`, AGENT_HALF_INTERVAL_SECONDS);
     const current = await io.checkpoint(`poll-agent-${i}`, async () => {
-      if (await io.cancellationRequested()) return requestedStop();
+      // The Cancel route stops the known provider run immediately. The midpoint
+      // database check is its <=60-second backup; a second DB read here is redundant.
       try {
         return observation(await io.read());
       } catch {
@@ -64,9 +85,7 @@ export async function waitForAgent(io: AgentWaitIO): Promise<AgentObservation> {
     // Cancellation can race with successful completion. Read the existing run; never submit again.
     if (stopped.status === 'COMPLETED') return observation(await io.read());
     return {
-      status: stopped.status,
-      resultText: 'null',
-      cancelledByUser: false,
+      ...(await stoppedObservation(stopped.status, false)),
       timedOut: stopped.status !== 'FAILED',
     };
   });

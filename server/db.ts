@@ -1,6 +1,7 @@
 import type { Job, SearchRun } from '../shared/types';
 import { AppError, type Env } from './env';
 import { boundedJson } from './http';
+import { AGENT_MAX_STEPS, AGENT_RESERVATION_USD } from './agent-limits';
 
 export const MAX_JOB_FACTS = 12;
 
@@ -19,6 +20,7 @@ export interface Operation {
   providerRunId: string | null;
   state: string;
   kind: string;
+  terminalVerified?: boolean;
 }
 export interface Reservation {
   allowed: boolean;
@@ -138,6 +140,15 @@ export class Database {
       p_source_host: host,
     });
   }
+  reserveBoundedAgent(runId: string, key: string, host: string): Promise<Reservation> {
+    return this.rpc('reserve_bounded_agent_operation', {
+      p_run_id: runId,
+      p_operation_key: key,
+      p_source_host: host,
+      p_max_steps: AGENT_MAX_STEPS,
+      p_reservation_usd: AGENT_RESERVATION_USD,
+    });
+  }
   claim(
     operationId: string,
     token: string,
@@ -159,19 +170,35 @@ export class Database {
     token: string,
     outcome: string,
     terminalVerified = false,
+    reportedActualUsd?: number,
   ): Promise<void> {
-    // Never release dollars using step-count estimates: billing settlement is not exposed by the documented API.
-    await this.rpc('settle_provider_operation', {
-      p_operation_id: operationId,
-      p_claim_token: token,
-      p_outcome: outcome,
-      p_actual_usd: null,
-      p_authoritative: false,
-      p_terminal_verified: terminalVerified,
-    });
+    // A validated reported-usage policy may reconcile terminal Agent counts. Other
+    // callers retain the reservation; elapsed time or missing metadata proves no cost.
+    const reported =
+      terminalVerified &&
+      typeof reportedActualUsd === 'number' &&
+      Number.isFinite(reportedActualUsd) &&
+      reportedActualUsd >= 0;
+    const result = await this.rpc<{ settled?: boolean; state?: string; reason?: string }>(
+      'settle_provider_operation',
+      {
+        p_operation_id: operationId,
+        p_claim_token: token,
+        p_outcome: outcome,
+        p_actual_usd: reported ? reportedActualUsd : null,
+        p_authoritative: reported,
+        p_terminal_verified: terminalVerified,
+      },
+    );
+    if (!result?.settled && (reported || result?.state !== 'needs_reconciliation' || result.reason))
+      throw new AppError(
+        'ACCOUNTING_UNCONFIRMED',
+        'The source allowance could not be reconciled. Its existing reservation is preserved.',
+        503,
+      );
   }
   async rejectBeforeStart(operationId: string, token: string): Promise<void> {
-    await this.rpc('settle_provider_operation', {
+    const result = await this.rpc<{ settled?: boolean }>('settle_provider_operation', {
       p_operation_id: operationId,
       p_claim_token: token,
       p_outcome: 'not-started',
@@ -179,10 +206,27 @@ export class Database {
       p_authoritative: true,
       p_terminal_verified: true,
     });
+    if (!result?.settled)
+      throw new AppError(
+        'ACCOUNTING_UNCONFIRMED',
+        'The unused source allowance could not be confirmed. Its existing reservation is preserved.',
+        503,
+      );
   }
 }
 
-export function admissionError(reason?: string): AppError {
+export function admissionError(
+  reason?: string,
+  operation?: 'search' | 'fetch' | 'agent',
+): AppError {
+  // A browser run needs a much larger reservation than a direct read. Its denial
+  // does not establish that the entire pilot allowance has been exhausted.
+  if (reason === 'budget_exhausted' && operation === 'agent')
+    return new AppError(
+      'AGENT_BUDGET_LIMIT',
+      'This browser-assisted check is unavailable within the pilot allowance. Any basic search results are preserved. No payment is needed.',
+      429,
+    );
   const reasons: Record<string, string> = {
     budget_exhausted:
       'The public pilot has reached its spending limit. Saved and cached results are still available.',

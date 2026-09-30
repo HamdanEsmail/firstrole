@@ -8,6 +8,7 @@ import { fingerprintInput, validatePreferences, verifyJob } from './quality';
 import { TinyFish } from './tinyfish';
 import { verifiedProviderEnv } from './rates';
 import { hydrateTerminalSearch } from './freshness';
+import { readAgentPreview } from './agent-preview';
 
 export { SearchWorkflow, AgentWorkflow } from './workflows';
 export { EnrichmentWorkflow } from './enrichment-workflow';
@@ -16,6 +17,30 @@ const UUID = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 const TERMINAL = new Set<SearchRun['status']>(['completed', 'partial', 'failed', 'cancelled']);
 
 function presentRun(run: SearchRun): SearchRun {
+  // Earlier payloads used one message for all operation types. They do not
+  // retain the rejected kind, so scope old source warnings without guessing it.
+  const legacyBudgetMessage =
+    'The public pilot has reached its spending limit. Saved and cached results are still available.';
+  const sourceBudgetMessage =
+    'This source check was unavailable within the pilot allowance. Any results already found are preserved. No payment is needed.';
+  if (
+    run.sources.some((source) => source.message === legacyBudgetMessage) ||
+    run.errors.some((error) => error.source && error.message === legacyBudgetMessage)
+  ) {
+    run = {
+      ...run,
+      sources: run.sources.map((source) =>
+        source.message === legacyBudgetMessage
+          ? { ...source, message: sourceBudgetMessage }
+          : source,
+      ),
+      errors: run.errors.map((error) =>
+        error.source && error.message === legacyBudgetMessage
+          ? { ...error, message: sourceBudgetMessage }
+          : error,
+      ),
+    };
+  }
   if (!run.cached || !run.results.length) return run;
   const times = run.results.map((job) => Date.parse(job.checkedAt)).filter(Number.isFinite);
   return times.length ? { ...run, updatedAt: new Date(Math.min(...times)).toISOString() } : run;
@@ -214,7 +239,7 @@ export default {
         return json(presentRun(current), admitted.run.cached ? 200 : 202, headers);
       }
 
-      const searchMatch = url.pathname.match(/^\/api\/searches\/([^/]+)(\/cancel)?$/);
+      const searchMatch = url.pathname.match(/^\/api\/searches\/([^/]+)(\/(?:cancel|preview))?$/);
       if (searchMatch) {
         const id = searchMatch[1];
         if (!UUID.test(id)) throw new AppError('NOT_FOUND', 'This search could not be found.', 404);
@@ -227,7 +252,24 @@ export default {
           );
         if (request.method === 'GET' && !searchMatch[2])
           return json(presentRun(await hydrateTerminalSearch(run, db)), 200, headers);
-        if (request.method === 'POST' && searchMatch[2]) {
+        if (request.method === 'GET' && searchMatch[2] === '/preview') {
+          const preview = await readAgentPreview(run, db, new TinyFish(env, db, id));
+          if (preview.status === 'live') {
+            // Do not expose a viewer if ownership/status changed during the metadata read.
+            const latest = await db.get(id, actorKey);
+            if (!latest || latest.cached || latest.status !== 'extracting')
+              return json({ status: 'ended' }, 200, {
+                ...headers,
+                'referrer-policy': 'no-referrer',
+              });
+          }
+          return json(preview, 200, {
+            ...headers,
+            'cache-control': 'private, no-store',
+            'referrer-policy': 'no-referrer',
+          });
+        }
+        if (request.method === 'POST' && searchMatch[2] === '/cancel') {
           if (!TERMINAL.has(run.status)) {
             await db.rpc('request_search_cancel', { p_run_id: id, p_actor_key: actorKey });
             const stopped = await stopOperations(db, env, id, await db.operations(id));

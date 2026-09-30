@@ -19,12 +19,21 @@ try {
     'supabase/migrations/202609300005_optional_enrichment_budgets.sql',
     'tests/database-enrichment-provider-baseline.sql',
     'supabase/migrations/202609300006_enrichment_provider_allowlist.sql',
+    'tests/database-bounded-agent-baseline.sql',
+    'supabase/migrations/202609300007_bounded_agent_reservations.sql',
+    'tests/database-assistance-baseline.sql',
+    'supabase/migrations/202609300008_release_unused_assistance.sql',
     'tests/database-acceptance.sql',
     'tests/database-limits.sql',
     'tests/database-rates.sql',
     'tests/database-catalog.sql',
     'tests/database-enrichment.sql',
     'tests/database-enrichment-providers.sql',
+    'tests/database-bounded-agent.sql',
+    'tests/database-assistance.sql',
+    'tests/database-cancel-assistance-baseline.sql',
+    'supabase/migrations/202609300009_cancel_unused_assistance.sql',
+    'tests/database-cancel-assistance.sql',
   ]) {
     const result = await db.exec(await readFile(path, 'utf8'));
     const messages = result.flatMap((r) => r.rows ?? []).filter((r) => r.result);

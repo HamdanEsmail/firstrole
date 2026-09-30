@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { waitForAgent, type AgentWaitIO } from '../server/agent-wait';
+import { startGuardedAgent } from '../server/agent-start';
 import { agentVerificationTargets } from '../server/search-state';
 import { finishOrHandoffSearch } from '../server/workflow-finalization';
 import { Database } from '../server/db';
@@ -31,12 +32,34 @@ describe('durable bounded Agent wait', () => {
       run_id: 'run-1',
       status: 'COMPLETED',
       result: { jobs: [{ title: 'Engineering Intern' }], note: '' },
+      num_of_steps: 4,
     });
     const result = await waitForAgent(fixture.io);
     expect(JSON.parse(result.resultText).jobs[0].title).toBe('Engineering Intern');
     expect(fixture.elapsed()).toBe(60);
-    expect(fixture.io.cancellationRequested).toHaveBeenCalledTimes(2);
+    expect(result.observedRunId).toBe('run-1');
+    expect(result.numOfSteps).toBe(4);
+    expect(fixture.io.cancellationRequested).toHaveBeenCalledTimes(1);
     expect(fixture.io.cancel).not.toHaveBeenCalled();
+  });
+  it('reads reported terminal counts once after user cancellation when accounting is enabled', async () => {
+    const fixture = ioFixture();
+    fixture.io.readTerminalUsage = true;
+    vi.mocked(fixture.io.cancellationRequested).mockResolvedValue(true);
+    vi.mocked(fixture.io.read).mockResolvedValue({
+      run_id: 'actual-provider-id',
+      status: 'CANCELLED',
+      num_of_steps: 0,
+    });
+    const result = await waitForAgent(fixture.io);
+    expect(result).toMatchObject({
+      cancelledByUser: true,
+      status: 'CANCELLED',
+      observedRunId: 'actual-provider-id',
+      numOfSteps: 0,
+    });
+    expect(fixture.io.cancel).toHaveBeenCalledOnce();
+    expect(fixture.io.read).toHaveBeenCalledOnce();
   });
   it('allows eight minutes of startup/waiting without increasing the eight scheduled provider reads', async () => {
     const fixture = ioFixture();
@@ -50,7 +73,7 @@ describe('durable bounded Agent wait', () => {
     expect((await waitForAgent(fixture.io)).status).toBe('COMPLETED');
     expect(fixture.elapsed()).toBe(480);
     expect(fixture.io.read).toHaveBeenCalledTimes(8);
-    expect(fixture.io.cancellationRequested).toHaveBeenCalledTimes(16);
+    expect(fixture.io.cancellationRequested).toHaveBeenCalledTimes(8);
     expect(fixture.io.cancel).not.toHaveBeenCalled();
   });
   it('checks cancellation at the thirty-second midpoint before another provider read', async () => {
@@ -127,7 +150,7 @@ describe('actual adapter HTTP request envelope', () => {
       failHandoff: false,
       failedTerminalWrites: 0,
       failCache: false,
-      expected: 47,
+      expected: 43,
       outcome: 'finished',
     },
     {
@@ -136,7 +159,7 @@ describe('actual adapter HTTP request envelope', () => {
       failHandoff: false,
       failedTerminalWrites: 1,
       failCache: false,
-      expected: 48,
+      expected: 44,
       outcome: 'finished',
     },
     {
@@ -145,7 +168,7 @@ describe('actual adapter HTTP request envelope', () => {
       failHandoff: false,
       failedTerminalWrites: 0,
       failCache: true,
-      expected: 47,
+      expected: 43,
       outcome: 'finished',
     },
     {
@@ -154,7 +177,7 @@ describe('actual adapter HTTP request envelope', () => {
       failHandoff: false,
       failedTerminalWrites: 0,
       failCache: false,
-      expected: 47,
+      expected: 43,
       outcome: 'handed-off',
     },
     {
@@ -163,7 +186,7 @@ describe('actual adapter HTTP request envelope', () => {
       failHandoff: true,
       failedTerminalWrites: 0,
       failCache: false,
-      expected: 48,
+      expected: 44,
       outcome: 'finished',
     },
     {
@@ -172,7 +195,7 @@ describe('actual adapter HTTP request envelope', () => {
       failHandoff: true,
       failedTerminalWrites: 1,
       failCache: false,
-      expected: 49,
+      expected: 45,
       outcome: 'finished',
     },
     {
@@ -181,11 +204,11 @@ describe('actual adapter HTTP request envelope', () => {
       failHandoff: true,
       failedTerminalWrites: 2,
       failCache: false,
-      expected: 49,
+      expected: 45,
       outcome: 'storage-unavailable',
     },
   ])(
-    'stays below50 with startup retry, schema rejection, terminal race and $name',
+    'stays below50 with startup retry, both capability rejections, terminal race and $name',
     async ({ handoff, failHandoff, failedTerminalWrites, failCache, expected, outcome }) => {
       const env = {
         ASSETS: {},
@@ -254,7 +277,7 @@ describe('actual adapter HTTP request envelope', () => {
               searchRate: '0.005',
               fetchRate: '0.001',
             });
-          if (name === 'reserve_provider_operation')
+          if (name === 'reserve_provider_operation' || name === 'reserve_bounded_agent_operation')
             return send({ allowed: true, operationId: `op-${++reservations}` });
           if (name === 'claim_provider_operation') return send({ claimed: true, state: 'claimed' });
           if (name === 'bind_provider_run') return send(true);
@@ -277,6 +300,8 @@ describe('actual adapter HTTP request envelope', () => {
           starts++;
           if (starts === 1)
             return send({ error: { message: 'output_schema capability not enabled' } }, 403);
+          if (starts === 2)
+            return send({ error: { message: 'agent_config.max_steps requires beta access' } }, 403);
           return send({ run_id: 'run-1', error: null });
         }
         if (target.pathname.endsWith('/cancel')) return send({ status: 'COMPLETED' });
@@ -312,12 +337,14 @@ describe('actual adapter HTTP request envelope', () => {
       const rates = await verifiedRateSnapshot(env, db, { allowRefresh: false });
       const api = new TinyFish({ ...env, ...rates }, db, run.id);
       await db.update(run);
-      try {
-        await api.startAgent(url, 'Read one opening', {}, 'schema');
-      } catch {
-        /* Conclusive pre-execution schema rejection only. */
-      }
-      const ticket = await api.startAgent(url, 'Read one opening', {}, 'without-schema', false);
+      const ticket = await startGuardedAgent(
+        {
+          checkpoint: async (_name, callback) => callback(),
+          submit: (key, schema, mode) =>
+            api.startAgent(url, 'Read one opening', {}, key, schema, mode),
+        },
+        true,
+      );
       const observed = await waitForAgent({
         sleep: async () => {},
         checkpoint: async (_name, callback) => callback(),
@@ -346,7 +373,7 @@ describe('actual adapter HTTP request envelope', () => {
         ).toHaveLength(0);
       expect(outbound).toHaveBeenCalledTimes(expected);
       expect(outbound.mock.calls.length).toBeLessThan(50);
-      expect(starts).toBe(2); // First never started; exactly one admitted execution after fallback.
+      expect(starts).toBe(3); // Two conclusive pre-execution rejections; exactly one actual execution.
       expect(polls).toBe(9);
       expect(
         outbound.mock.calls.filter(([target]) => String(target).includes('api.fetch.tinyfish.ai')),
