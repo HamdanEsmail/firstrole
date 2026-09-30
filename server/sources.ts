@@ -17,6 +17,7 @@ const AGGREGATORS = [
   'ziprecruiter.com',
   'foundit.com',
   'prosple.com',
+  'bebee.com',
 ];
 const ATS = [
   'smartrecruiters.com',
@@ -49,7 +50,7 @@ export function discoveryQueries(p: SearchPreferences): SearchQuery[] {
         : location;
   return [
     {
-      query: `${role} "${location}" ${terms[0]}`,
+      query: `${role} "${location}" ${terms[0]} ${p.keywords}`.trim(),
       options: { excludeDomains: AGGREGATORS.join(',') },
     },
     {
@@ -160,12 +161,16 @@ export function sourceRelevance(
   if (!located && (hasRecognizedLocation(snippet) || !detail)) return null;
   const early = EARLY_CAREER.test(combined);
   if (detail && !early && primaryMatches < requested.length) return null;
+  const keywordMatches = stems(preferences.keywords).filter((stem) =>
+    combinedWords.some((word) => matchingStem(word, stem)),
+  ).length;
   const score =
     (detail ? 35 : 10) +
     Math.round((25 * primaryMatches) / requested.length) +
     (primaryLocated ? 30 : located ? 22 : -25) +
     (early ? 20 : 0) -
-    priority(url);
+    priority(url) +
+    Math.min(15, keywordMatches * 5);
   return { url, score, located, detail };
 }
 
@@ -180,6 +185,20 @@ export function selectSourceUrls(hits: DiscoveryHit[], preferences: SearchPrefer
   const chosen: string[] = [];
   const companies = new Set<string>();
   let unlocated = 0;
+  const companyKeywords = stems(preferences.keywords);
+  const preferredPortal = candidates.find(
+    (candidate) =>
+      !candidate.detail &&
+      candidate.located &&
+      priority(candidate.url) < 60 &&
+      companyKeywords.some((keyword) =>
+        normalized(new URL(candidate.url).hostname).split(' ').includes(keyword),
+      ),
+  );
+  if (preferredPortal) {
+    chosen.push(preferredPortal.url);
+    companies.add(companyKey(preferredPortal.url));
+  }
   for (const candidate of candidates) {
     if (chosen.length === 4) break;
     if (companies.has(companyKey(candidate.url)) || (!candidate.located && unlocated >= 1))
@@ -205,13 +224,29 @@ export interface SourceReading {
   incomplete: boolean;
 }
 
-export function selectAgentSource(readings: SourceReading[]): string | undefined {
+export function selectAgentSource(
+  readings: SourceReading[],
+  preferences?: SearchPreferences,
+  coveredSources: string[] = [],
+): string | undefined {
   const usable = readings.filter(
-    (source) => !source.blocked && !source.closed && source.incomplete,
+    (source) =>
+      !source.blocked &&
+      !source.closed &&
+      source.incomplete &&
+      priority(source.url) < 60 &&
+      !coveredSources.includes(source.url),
   );
+  const keywords = stems(preferences?.keywords || '');
+  const keywordScore = (url: string) =>
+    keywords.filter((keyword) => normalized(new URL(url).hostname).split(' ').includes(keyword))
+      .length *
+      2 +
+    keywords.filter((keyword) => normalized(url).split(' ').includes(keyword)).length;
   usable.sort(
     (a, b) =>
       Number(b.readable) - Number(a.readable) ||
+      keywordScore(b.url) - keywordScore(a.url) ||
       priority(a.url) - priority(b.url) ||
       Number(isJobDetail(a.url)) - Number(isJobDetail(b.url)),
   );

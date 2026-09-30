@@ -8,7 +8,7 @@ const { Miniflare, Response: RuntimeResponse } = requireWrangler(
   'miniflare',
 ) as typeof import('miniflare');
 
-async function exerciseRuntime(redirect = false) {
+async function exerciseRuntime(redirect = false, kind: 'rates' | 'catalog' = 'rates') {
   const bundle = await build({
     stdin: {
       resolveDir: process.cwd(),
@@ -16,11 +16,18 @@ async function exerciseRuntime(redirect = false) {
       contents: `
         import { verifiedRateSnapshot } from './server/rates';
         import { providerReady } from './server/env';
+        import { Database } from './server/db';
         console.warn = () => {};
         const env = { SUPABASE_URL:'https://test.supabase.co', SUPABASE_PUBLISHABLE_KEY:'synthetic-public',
           SUPABASE_SERVICE_ROLE_KEY:'synthetic-service', GUEST_COOKIE_SECRET:'synthetic-cookie',
           TINYFISH_API_KEY:'synthetic-provider', TINYFISH_ENABLED:'true' };
-        export default {async fetch() {
+        export default {async fetch(request) {
+          if(new URL(request.url).pathname === '/catalog') {
+            try {
+              const jobs = await new Database(env).latestVerifiedJobs(['a'.repeat(64)]);
+              return Response.json({ok:jobs.length===1 && jobs[0].id==='a'.repeat(64)});
+            } catch(error) { return Response.json({ok:false,code:error.code}); }
+          }
           const db = {async rpc(name, args) {
             if(name==='get_provider_rate_attestation') return null;
             if(name==='claim_provider_rate_refresh') return {state:'claimed'};
@@ -64,6 +71,10 @@ async function exerciseRuntime(redirect = false) {
                   status: 302,
                   headers: { location: 'https://untrusted.invalid/target' },
                 });
+              if (kind === 'catalog')
+                return RuntimeResponse.json([
+                  { job_id: 'a'.repeat(64), job: { id: 'a'.repeat(64) } },
+                ]);
               return RuntimeResponse.json({
                 rates: {
                   as_of: new Date().toISOString(),
@@ -86,7 +97,7 @@ async function exerciseRuntime(redirect = false) {
     ],
   });
   try {
-    const response = await runtime.dispatchFetch('http://local.test');
+    const response = await runtime.dispatchFetch(`http://local.test/${kind}`);
     return { result: (await response.json()) as { ok: boolean; code?: string }, requests };
   } finally {
     await runtime.dispose();
@@ -103,6 +114,20 @@ describe('actual Cloudflare workerd rate preflight', () => {
   it('rejects a redirect without sending credentials to a second destination', async () => {
     const checked = await exerciseRuntime(true);
     expect(checked.result).toEqual({ ok: false, code: 'RATES_UNVERIFIED_METADATA_HTTP' });
+    expect(checked.requests).toHaveLength(1);
+  });
+});
+
+describe('actual Cloudflare workerd catalog read', () => {
+  it('loads the real database adapter without unsupported redirect options', async () => {
+    const checked = await exerciseRuntime(false, 'catalog');
+    expect(checked.result).toEqual({ ok: true });
+    expect(checked.requests).toHaveLength(1);
+    expect(new URL(checked.requests[0].url).pathname).toBe('/rest/v1/verified_jobs');
+  });
+  it('rejects a catalog redirect without forwarding the service credential', async () => {
+    const checked = await exerciseRuntime(true, 'catalog');
+    expect(checked.result).toEqual({ ok: false, code: 'STORAGE_UNAVAILABLE' });
     expect(checked.requests).toHaveLength(1);
   });
 });

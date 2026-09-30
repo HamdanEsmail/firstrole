@@ -8,18 +8,35 @@ export interface Owner {
   cookie?: string;
 }
 const COOKIE = 'firstrole_guest';
+const encoder = new TextEncoder();
+let signingKeyCache: { secret: string; promise: Promise<CryptoKey> } | null = null;
+
+function signingKey(secret: string): Promise<CryptoKey> {
+  if (signingKeyCache?.secret === secret) return signingKeyCache.promise;
+  // Keep only the current secret's nonextractable key, shared by concurrent
+  // requests in this isolate. A rotated secret always imports a different key.
+  const entry = {
+    secret,
+    promise: crypto.subtle.importKey(
+      'raw',
+      encoder.encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    ),
+  };
+  signingKeyCache = entry;
+  void entry.promise.catch(() => {
+    // A rejected import is retryable, but an old rejection must not evict a
+    // newer secret that was installed while the first import was pending.
+    if (signingKeyCache === entry) signingKeyCache = null;
+  });
+  return entry.promise;
+}
 
 async function signature(value: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const signed = new Uint8Array(
-    await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value)),
-  );
+  const key = await signingKey(secret);
+  const signed = new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(value)));
   return btoa(String.fromCharCode(...signed))
     .replaceAll('+', '-')
     .replaceAll('/', '_')

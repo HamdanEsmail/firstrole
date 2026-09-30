@@ -1,7 +1,15 @@
 export interface Env {
   ASSETS: Fetcher;
   SEARCH_WORKFLOW: Workflow<{ searchId: string }>;
-  AGENT_WORKFLOW: Workflow<{ searchId: string; sourceUrl: string }>;
+  AGENT_WORKFLOW: Workflow<import('./enrichment-candidates').AgentInput>;
+  ENRICHMENT_WORKFLOW?: Workflow<import('./enrichment-candidates').EnrichmentInput>;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_ENABLED?: string;
+  OPENROUTER_PROVIDER?: string;
+  FIRECRAWL_API_KEY?: string;
+  FIRECRAWL_ENABLED?: string;
+  FIRECRAWL_FREE_PLAN_VERIFIED_AT?: string;
+  FIRECRAWL_FREE_PLAN_KEY_SHA256?: string;
   SUPABASE_URL?: string;
   SUPABASE_PUBLISHABLE_KEY?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;

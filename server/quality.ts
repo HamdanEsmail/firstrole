@@ -1,7 +1,15 @@
 import type { Job, SearchPreferences } from '../shared/types';
 import { AppError } from './env';
 import { safePublicUrl, sha256 } from './http';
-import { extractRoleContent, sourceCompanyCase } from './content';
+import {
+  confirmedDescription,
+  extractCompensation,
+  extractRoleContent,
+  mergeConfirmedRequirements,
+  plainText,
+  sourceCompanyCase,
+  sourceConfirmsClaim,
+} from './content';
 
 const text = (value: unknown, max = 300): string =>
   typeof value === 'string'
@@ -14,16 +22,27 @@ const words = (value: string): string[] =>
   value
     .toLowerCase()
     .match(/[\p{L}\p{N}+#.]{2,}/gu)
+    ?.map((word) => word.replace(/\.+$/, ''))
     ?.filter(
-      (w) => !['the', 'and', 'for', 'with', 'job', 'jobs', 'role', 'in', 'of'].includes(w),
+      (w) =>
+        w.length > 1 &&
+        !['the', 'and', 'for', 'with', 'job', 'jobs', 'role', 'in', 'of'].includes(w),
     ) ?? [];
 const CLOSED =
-  /(?:this (?:job|position|vacancy|opening) (?:is|has been) (?:now )?(?:closed|filled|removed)|\b(?:job|position|vacancy|opening)\b[^.!?\n]{0,100}\bhas been (?:filled|closed|removed)\b|no longer (?:accepting applications|available)|job (?:has )?expired|position has been filled)/i;
+  /(?:this (?:job|position|vacancy|opening) (?:is|has been) (?:now )?(?:closed|filled|removed)|\b(?:job|position|vacancy|opening)\b[^.!?\n]{0,100}\bhas been (?:filled|closed|removed)\b|no longer (?:accepting applications|available)|job (?:has )?expired|position has been filled|\bthe page you (?:are|were) looking for (?:does not|doesn['’]t) exist\b|\b(?:page|job) (?:was )?not found\b)/i;
 const SENIOR =
   /\b(senior|sr\.?|principal|director|head of|vice president|staff engineer|lead engineer)\b/i;
 
 export function listingClosed(value: unknown): boolean {
   return typeof value === 'string' && CLOSED.test(value.slice(0, 60_000));
+}
+
+export function deadlinePassed(deadline: string | null, now = Date.now()): boolean {
+  if (!deadline) return false;
+  const timestamp = Date.parse(deadline);
+  if (!Number.isFinite(timestamp)) return false;
+  // Source dates generally omit a closing hour/timezone. Treat the stated day as inclusive.
+  return new Date(timestamp).toISOString().slice(0, 10) < new Date(now).toISOString().slice(0, 10);
 }
 
 function sponsorshipFromText(value: string): Job['sponsorship'] {
@@ -325,7 +344,9 @@ export function scoreJob(job: Job, p: SearchPreferences): Job['match'] {
   )
     score += 10;
   const keywordMatches = words(p.keywords).filter((w) =>
-    words(`${job.title} ${job.description}`).includes(w),
+    words(`${job.title} ${job.company} ${job.description} ${job.requirements.join(' ')}`).includes(
+      w,
+    ),
   );
   if (keywordMatches.length) {
     score += 10;
@@ -368,7 +389,8 @@ export function scoreJob(job: Job, p: SearchPreferences): Job['match'] {
 }
 
 export function eligible(job: Job, p: SearchPreferences): boolean {
-  if (job.availability === 'closed' || SENIOR.test(job.title)) return false;
+  if (job.availability === 'closed' || deadlinePassed(job.deadline) || SENIOR.test(job.title))
+    return false;
   if (p.sponsorshipRequired && job.sponsorship !== 'available') return false;
   if (job.employmentType === 'unknown' || !p.jobTypes.includes(job.employmentType)) return false;
   if (p.workplaces.length && (job.workplace === 'unknown' || !p.workplaces.includes(job.workplace)))
@@ -428,6 +450,13 @@ export async function normalizeAgentJob(
   const salaryRaw =
     r.salary && typeof r.salary === 'object' ? (r.salary as Record<string, unknown>) : null;
   const salaryText = text(salaryRaw?.text, 200);
+  const salaryEvidence = evidence
+    .filter((e) => /salary|compensation|pay/i.test(e.field))
+    .map((e) =>
+      /\b(?:compensation|salary|pay range)\s*:/i.test(e.text) ? e.text : `Compensation: ${e.text}`,
+    )
+    .join('\n');
+  const evidencedPay = extractCompensation(salaryEvidence || sourceText);
   const job: Job = {
     id: await sha256(sourceUrl),
     title,
@@ -446,8 +475,12 @@ export async function normalizeAgentJob(
           .filter(Boolean)
           .slice(0, 8)
       : [],
-    salary:
-      salaryRaw && salaryText && sourceText.includes(salaryText)
+    salary: evidencedPay
+      ? { text: evidencedPay.text, currency: evidencedPay.currency, period: evidencedPay.period }
+      : salaryRaw &&
+          salaryText &&
+          /salary|compensation|pay/i.test(sourceText) &&
+          sourceConfirmsClaim(salaryText, sourceText)
         ? {
             text: salaryText,
             currency: text(salaryRaw.currency, 12) || null,
@@ -466,6 +499,51 @@ export async function normalizeAgentJob(
   return job;
 }
 
+function postingLabel(visible: string, labels: string): string | null {
+  const related = visible.search(
+    /(?:^|\n)\s*(?:related|similar|recommended|other) (?:jobs?|roles?|openings?)\b[^\n]*\n/i,
+  );
+  if (related >= 0) visible = visible.slice(0, related);
+  const value = visible.match(
+    new RegExp(`(?:^|\\n|[ \\t])(?:${labels})\\s*[:：]\\s*([^\\n]+)`, 'i'),
+  )?.[1];
+  // Some readers flatten adjacent metadata fields onto one line. Stop at the next named field.
+  return (
+    value
+      ?.split(
+        /\s+(?:(?:State\/Province|Business Group|Legal Entity|Business Line|Work Location Model|Operating Group|Primary Location|Compensation)\s*:|Company Description\b)/i,
+      )[0]
+      ?.trim() || null
+  );
+}
+
+function postingLocation(visible: string): string | null {
+  return (
+    postingLabel(visible, 'Primary (?:Job )?Location') ||
+    postingLabel(visible, 'Job Location|Locations?') ||
+    visible.match(/(?:^|\n)Locations?\s*\n\s*([^\n]+)/i)?.[1]?.trim() ||
+    null
+  );
+}
+
+function postingWorkplace(
+  visible: string,
+): { workplace: Job['workplace']; evidence: string } | null {
+  const value = postingLabel(
+    visible,
+    'Work Location Model|Workplace|Work Model|Working Arrangement',
+  );
+  if (!value || /\b(?:no|not|non)[ -]?(?:remote|hybrid|on[- ]?site)\b/i.test(value)) return null;
+  const workplace = /\bhybrid\b/i.test(value)
+    ? 'hybrid'
+    : /\bremote\b/i.test(value)
+      ? 'remote'
+      : /\b(?:on[- ]?site|in[- ]office)\b/i.test(value)
+        ? 'onsite'
+        : 'unknown';
+  return workplace === 'unknown' ? null : { workplace, evidence: value };
+}
+
 function employerFromSource(
   content: string,
   metadataTitle: string,
@@ -473,6 +551,8 @@ function employerFromSource(
   url: string,
 ): string | null {
   const host = new URL(url).hostname;
+  const visible = plainText(content);
+  const legalEntity = postingLabel(visible, 'Legal Entity|Employing Entity');
   const companyHeading = content.match(
     /^###\s+(.+?)\s*[-–—|]\s*(?:Students|Careers|Jobs|Early Careers)\s*$/im,
   )?.[1];
@@ -486,13 +566,14 @@ function employerFromSource(
       suffix,
     );
   return (
-    content.match(/(?:Company|Employer|Hiring organization)\*{0,2}\s*[:：]\s*([^\n]+)/i)?.[1] ||
+    postingLabel(visible, 'Company|Employer|Hiring organization') ||
     roleTitle.match(/\s+at\s+(.+)$/i)?.[1] ||
     metadataTitle.match(/\s+at\s+(.+)$/i)?.[1] ||
     companyHeading ||
     (describedCompany && !/^(?:we|our|the company|this company)\b/i.test(describedCompany)
       ? describedCompany
       : null) ||
+    legalEntity ||
     (/myworkdayjobs\.com$/.test(host) ? host.split('.')[0] : null) ||
     (suffix && !invalidSuffix ? suffix : null) ||
     (/lever\.co$|greenhouse\.io$|ashbyhq\.com$|smartrecruiters\.com$/.test(host)
@@ -529,7 +610,9 @@ export async function extractPageJob(
   const url = sourceCandidate(page.final_url || page.url);
   if (!url || !isJobDetail(url) || typeof page.text !== 'string') return null;
   const content = page.text.slice(0, 60_000);
+  const visible = plainText(content);
   const roleContent = extractRoleContent(content);
+  const compensation = extractCompensation(content);
   const headings = [...content.matchAll(/^#{1,2}\s+([^\n]+)/gm)]
     .map((match) => match[1])
     .filter(
@@ -557,10 +640,7 @@ export async function extractPageJob(
   const company = employerFromSource(content, page.title || '', pageTitle, url);
   if (!company) return null;
   const title = cleanRoleTitle(pageTitle, company);
-  const labelledLocation =
-    content
-      .match(/(?:^|\n)\*{0,2}(?:Locations?|Job location)\*{0,2}\s*[:：]?\s*\n?\s*([^\n]+)/i)?.[1]
-      ?.replace(/\*\*/g, '') ?? 'Location not stated';
+  const labelledLocation = postingLocation(visible) || 'Location not stated';
   const headingPosition = heading ? content.indexOf(heading) + heading.length : -1;
   const adjacent =
     headingPosition >= 0
@@ -610,13 +690,16 @@ export async function extractPageJob(
       : /\b(junior|entry[- ]level|associate|trainee)\b/i.test(title)
         ? 'entry-level'
         : 'unknown';
-  const workplace = /\bhybrid\b/i.test(location)
-    ? 'hybrid'
-    : /\bremote\b/i.test(location)
-      ? 'remote'
-      : /\bon[- ]site\b/i.test(location)
-        ? 'onsite'
-        : 'unknown';
+  const labelledWorkplace = postingWorkplace(visible);
+  const workplace =
+    labelledWorkplace?.workplace ||
+    (/\bhybrid\b/i.test(location)
+      ? 'hybrid'
+      : /\bremote\b/i.test(location)
+        ? 'remote'
+        : /\bon[- ]site\b/i.test(location)
+          ? 'onsite'
+          : 'unknown');
   const job = await normalizeAgentJob(
     {
       title,
@@ -627,6 +710,9 @@ export async function extractPageJob(
       sourceUrl: url,
       applyUrl: url,
       description: roleContent.description,
+      salary: compensation
+        ? { text: compensation.text, currency: compensation.currency, period: compensation.period }
+        : null,
       requisitionId:
         content.match(
           /(?:Requisition(?:\s+(?:Number|ID))?|Job\s*(?:ID|Number))\*{0,2}\s*:\*{0,2}\s*([\w-]{3,})/i,
@@ -634,12 +720,19 @@ export async function extractPageJob(
       requirements: roleContent.requirements,
       evidence: [
         { field: 'title', text: pageTitle, sourceUrl: url },
+        ...(visible.toLowerCase().includes(company.toLowerCase())
+          ? [{ field: 'company', text: company, sourceUrl: url }]
+          : []),
         ...(location !== 'Location not stated'
           ? [{ field: 'location', text: location, sourceUrl: url }]
+          : []),
+        ...(labelledWorkplace
+          ? [{ field: 'workplace', text: labelledWorkplace.evidence, sourceUrl: url }]
           : []),
         ...(roleContent.description
           ? [{ field: 'listing', text: roleContent.description.slice(0, 650), sourceUrl: url }]
           : []),
+        ...(compensation ? [{ field: 'salary', text: compensation.evidence, sourceUrl: url }] : []),
       ],
     },
     url,
@@ -704,9 +797,22 @@ export function verifyJob(
         : 'unverified',
   };
   if (content && !login) {
+    const visible = plainText(content);
+    const explicitLocation = postingLocation(visible);
+    const explicitWorkplace = postingWorkplace(visible);
+    if (explicitLocation && !/\[\[|\{\{|not (?:specified|stated)/i.test(explicitLocation))
+      result.location = explicitLocation;
+    if (explicitWorkplace) {
+      result.workplace = explicitWorkplace.workplace;
+      if (result.workplace !== 'remote') result.remoteRegion = null;
+    }
     const roleContent = extractRoleContent(content);
-    result.description = roleContent.description;
-    result.requirements = roleContent.requirements;
+    const priorDescription = confirmedDescription(
+      job.description,
+      roleContent.description || content,
+    );
+    result.description = priorDescription || roleContent.description;
+    result.requirements = mergeConfirmedRequirements(job.requirements, roleContent.requirements);
     const freshCompany = employerFromSource(
       content,
       page.title || '',
@@ -722,20 +828,52 @@ export function verifyJob(
       )
         result.title = candidate;
     }
-    result.salary =
-      job.salary && normalizedContent.includes(normalize(job.salary.text)) ? job.salary : null;
+    const compensation = extractCompensation(content);
+    result.salary = compensation
+      ? { text: compensation.text, currency: compensation.currency, period: compensation.period }
+      : null;
     result.postedAt = evidenceDate(job.postedAt, content);
     result.deadline = evidenceDate(job.deadline, content);
     result.sponsorship = sponsorshipFromText(content);
     result.evidence = job.evidence.filter(
       (e) =>
         e.field !== 'listing' &&
+        e.field !== 'salary' &&
+        !(explicitLocation && e.field === 'location') &&
+        !(explicitWorkplace && e.field === 'workplace') &&
         (e.sourceUrl !== job.sourceUrl || normalizedContent.includes(normalize(e.text))),
     );
-    if (roleContent.description)
+    if (explicitLocation && result.location === explicitLocation)
+      result.evidence.push({
+        field: 'location',
+        text: explicitLocation,
+        sourceUrl: final || job.sourceUrl,
+      });
+    if (explicitWorkplace)
+      result.evidence.push({
+        field: 'workplace',
+        text: explicitWorkplace.evidence,
+        sourceUrl: final || job.sourceUrl,
+      });
+    if (
+      visible.toLowerCase().includes(result.company.toLowerCase()) &&
+      !result.evidence.some((e) => e.field === 'company' && e.text === result.company)
+    )
+      result.evidence.push({
+        field: 'company',
+        text: result.company,
+        sourceUrl: final || job.sourceUrl,
+      });
+    if (result.description)
       result.evidence.push({
         field: 'listing',
-        text: roleContent.description.slice(0, 650),
+        text: result.description.slice(0, 650),
+        sourceUrl: final || job.sourceUrl,
+      });
+    if (compensation)
+      result.evidence.push({
+        field: 'salary',
+        text: compensation.evidence,
         sourceUrl: final || job.sourceUrl,
       });
     if (
@@ -762,28 +900,148 @@ export function verifyJob(
         sourceUrl: final || job.sourceUrl,
       },
     ].slice(0, 12);
+  if (deadlinePassed(result.deadline)) result.availability = 'closed';
   result.match = scoreJob(result, p);
   return result;
 }
 
+function individualJobUrl(value: string): string | null {
+  const safe = safePublicUrl(value);
+  if (!safe) return null;
+  const parsed = new URL(safe);
+  const idKeys = new Set([
+    'jobid',
+    'job_id',
+    'gh_jid',
+    'requisitionid',
+    'requisition_id',
+    'reqid',
+    'positionid',
+    'position_id',
+  ]);
+  const identifiedQuery = [...parsed.searchParams].some(
+    ([key, id]) =>
+      idKeys.has(key.toLowerCase()) &&
+      /^[a-z\d][a-z\d._-]{0,127}$/i.test(id) &&
+      !/^(?:new|all|search|apply|unknown)$/i.test(id),
+  );
+  // Careers homepages, search pages and general application forms identify no individual opening.
+  const generic =
+    /\/(?:jobs?|positions?|requisitions?)\/(?:search|results|all|browse|apply|application|login|register|talent[-_]pool|join)(?:\/|$)/i.test(
+      parsed.pathname,
+    );
+  const specificApplication =
+    /\/(?:apply|application)\/(?:\d+|[a-f\d]{8}-[a-f\d-]{15,})(?:\/|$)/i.test(parsed.pathname) ||
+    /\/(?:oneclick-ui)\/company\/[^/]+\/publication\/\d+(?:\/|$)/i.test(parsed.pathname);
+  if (
+    !identifiedQuery &&
+    ((generic && !specificApplication) || (!isJobDetail(safe) && !specificApplication))
+  )
+    return null;
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+  if (/\/apply$/i.test(parsed.pathname)) {
+    const detail = new URL(parsed);
+    detail.pathname = detail.pathname.replace(/\/apply$/i, '');
+    if (isJobDetail(detail.href)) parsed.pathname = detail.pathname;
+  }
+  parsed.searchParams.sort();
+  return parsed.href;
+}
+
+function requisition(value: string | null): string | null {
+  const clean = value?.trim().toLowerCase();
+  return clean && !/^(?:unknown|not stated|n\/?a|null|none|-+)$/.test(clean) ? clean : null;
+}
+
 export function deduplicate(jobs: Job[]): Job[] {
-  const unique = new Map<string, Job>();
-  const aliases = new Map<string, string>();
-  for (const job of jobs) {
-    const canonical = safePublicUrl(job.sourceUrl) || job.sourceUrl;
-    const identity = `${job.company.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')}|${job.requisitionId || `${job.title.toLowerCase()}|${job.location.toLowerCase()}`}`;
-    const key = aliases.get(identity) || canonical;
-    const previous = unique.get(key);
-    const certainty = (value: Job) => (value.availability === 'unverified' ? 0 : 1);
+  const identities = jobs.map((job) => {
+    const source = individualJobUrl(job.sourceUrl);
+    const apply = individualJobUrl(job.applyUrl);
+    const req = requisition(job.requisitionId);
+    const company = job.company.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+    const knownCompany = company && !/^(?:unknown|companynotstated|notstated|na)$/.test(company);
+    const applyObserved =
+      job.availability !== 'unverified' ||
+      job.evidence.some(
+        (e) =>
+          /^(?:apply_?url|application_?url|apply(?: link)?|application(?: link)?)$/i.test(
+            e.field,
+          ) &&
+          (individualJobUrl(e.sourceUrl) === apply || e.text.includes(job.applyUrl)),
+      );
+    return {
+      source,
+      req,
+      key: req && knownCompany ? `${company}|${req}` : null,
+      destinations: new Set(
+        [source, applyObserved ? apply : null].filter((url): url is string => Boolean(url)),
+      ),
+    };
+  });
+  const parents = jobs.map((_, index) => index);
+  const reqs = identities.map((identity) => new Set(identity.req ? [identity.req] : []));
+  const root = (index: number): number => {
+    while (parents[index] !== index) {
+      parents[index] = parents[parents[index]];
+      index = parents[index];
+    }
+    return index;
+  };
+  const merge = (left: number, right: number) => {
+    const a = root(left),
+      b = root(right);
+    if (a === b) return;
+    parents[b] = a;
+    for (const req of reqs[b]) reqs[a].add(req);
+  };
+  // Strong identities are resolved first. An authoritative source URL can be reused or corrected,
+  // so two observations of that exact source still represent one rendered listing.
+  for (let i = 0; i < jobs.length; i++)
+    for (let j = i + 1; j < jobs.length; j++) {
+      const a = identities[i],
+        b = identities[j];
+      if ((a.source && a.source === b.source) || (a.key && a.key === b.key)) merge(i, j);
+    }
+  const destinationReqs = new Map<string, Set<string>>();
+  for (const [index, identity] of identities.entries())
+    for (const url of identity.destinations) {
+      const known = destinationReqs.get(url) || new Set<string>();
+      for (const req of reqs[root(index)]) known.add(req);
+      destinationReqs.set(url, known);
+    }
+  // A corroborated individual application URL is secondary evidence. Conflicting requisitions
+  // block this weaker alias; identical titles or locations never contribute an identity.
+  for (let i = 0; i < jobs.length; i++)
+    for (let j = i + 1; j < jobs.length; j++) {
+      const a = root(i),
+        b = root(j);
+      if (a === b || new Set([...reqs[a], ...reqs[b]]).size > 1) continue;
+      if (
+        [...identities[i].destinations].some(
+          (url) =>
+            identities[j].destinations.has(url) && (destinationReqs.get(url)?.size || 0) <= 1,
+        )
+      )
+        merge(i, j);
+    }
+  const unique = new Map<number, Job>();
+  const certainty = (job: Job) => (job.availability === 'unverified' ? 0 : 1);
+  const checked = (job: Job) =>
+    Number.isFinite(Date.parse(job.checkedAt)) ? Date.parse(job.checkedAt) : -Infinity;
+  for (const [index, job] of jobs.entries()) {
+    const key = root(index),
+      previous = unique.get(key);
     if (
       !previous ||
       certainty(job) > certainty(previous) ||
       (certainty(job) === certainty(previous) &&
-        (Date.parse(job.checkedAt) > Date.parse(previous.checkedAt) ||
-          (job.checkedAt === previous.checkedAt && job.evidence.length > previous.evidence.length)))
+        (checked(job) > checked(previous) ||
+          (checked(job) === checked(previous) &&
+            ((job.availability === 'closed' && previous.availability !== 'closed') ||
+              (job.availability === previous.availability &&
+                job.evidence.length > previous.evidence.length)))))
     )
       unique.set(key, job);
-    aliases.set(identity, key);
   }
   return [...unique.values()].sort(
     (a, b) => b.match.score - a.match.score || a.title.localeCompare(b.title),

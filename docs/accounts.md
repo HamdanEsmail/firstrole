@@ -22,7 +22,7 @@ Signed-in saves are read on sign-in and refreshed when the user returns to the t
 
 Use Microsoft Edge for dashboard setup. Keep `GOOGLE_AUTH_ENABLED=false` until the provider and redirects are configured and a real sign-in has been checked.
 
-1. Create a Supabase project on the free plan. Apply all three SQL files in `supabase/migrations` once in filename order. They create the account tables, ownership policies, search storage, spending controls, and private provider-rate proof cache.
+1. Create a Supabase project on the free plan. Apply all numbered SQL files in `supabase/migrations` once in filename order. They create the account tables, ownership policies, search storage, spending controls, and private provider-rate proof cache.
 2. Set the deployed FirstRole HTTPS origin as the Supabase Auth **Site URL**. Allow the exact redirect `${FIRSTROLE_ORIGIN}/`. For local development, also allow `http://127.0.0.1:5173/` if that is the origin being used. Keep production redirects specific to the deployed application.
 3. Configure a Google OAuth web client for FirstRole. The Google redirect URI is the callback URI provided by the Supabase Google provider configuration, rather than the FirstRole homepage. Copy that callback exactly. Add the Google client ID and client secret to the Supabase provider configuration.
 4. Complete the Google consent configuration. A consent application in testing mode must explicitly allow each pilot tester. Before inviting arbitrary public users, finish the provider's publishing requirements. Only basic identity scopes are needed: `openid`, `email`, and `profile`.

@@ -6,9 +6,9 @@ Apply the numbered files in `migrations/` in order to a **new Supabase project**
 
 The signed-in Supabase client can read and change only rows whose `user_id = (select auth.uid())`.
 
-| Table | Columns |
-| --- | --- |
-| `profiles` | `user_id` UUID primary key; `preferences` JSON object; server-maintained `updated_at` |
+| Table        | Columns                                                                                                                                            |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `profiles`   | `user_id` UUID primary key; `preferences` JSON object; server-maintained `updated_at`                                                              |
 | `saved_jobs` | Composite primary key `user_id, job_id`; `job` JSON snapshot; `status`; `notes`; nullable `applied_at`; `saved_at`; server-maintained `updated_at` |
 
 Status values match `shared/types.ts`: Saved, Applied, Interviewing, Offer, Rejected, Withdrawn. Notes are limited to 10,000 characters and a job snapshot to 128 KiB. `job.id` must match `job_id`. The browser supplies ISO timestamp strings for saved/applied dates. Guest import uses conflict-ignore semantics on `(user_id, job_id)` so existing account data wins; only clear local records after verifying the account records.
@@ -17,25 +17,33 @@ Deleting the Auth user cascades preferences, saved jobs, and private search runs
 
 ## Service-only orchestration
 
+### Catalog freshness
+
+Migration `202609300004_monotonic_job_facts.sql` makes `firstrole_index_jobs` replace a catalog entry only when the incoming `checkedAt` is strictly newer. Comparison uses an explicit-timezone timestamp, so equal instants expressed with different offsets do not replace one another. Older, missing, or invalid timestamps cannot overwrite an existing timestamped entry. A valid new check can replace an untimestamped legacy entry, and duplicate IDs within one payload select the newest observation.
+
+The conflict update evaluates this guard atomically against the catalog row. The indexing function retains its identity, owner, `SECURITY DEFINER` behavior, fixed search path, and service-only execution permissions. Its timestamp parser is also private. Applying this migration changes functions and grants; it does not rewrite existing job, account, or budget rows.
+
+HTTP reads of completed searches and cached results fetch at most twelve existing job IDs from this catalog, use only strictly newer source facts, and recompute eligibility and ranking for the current search preferences. Shared-cache expiry and saved application records are unchanged. Active search polling does not perform this extra catalog read.
+
 All private tables have RLS enabled with no browser policies. All RPCs below explicitly revoke access from `PUBLIC`, `anon`, and `authenticated`; only `service_role` can call them. Never include the service-role secret in a browser bundle.
 
-| RPC | Result / behavior |
-| --- | --- |
-| `create_search_run(p_run_id,p_actor_key,p_owner_id,p_guest_id,p_network_key,p_fingerprint,p_payload,p_assisted,p_idempotency_key)` | `{admitted,run,reused,reason?}`. Exactly one of owner and guest must be present. Replayed actor/idempotency keys return the original run before charging/counting; a changed fingerprint is rejected. |
-| `get_search_run(p_run_id,p_actor_key)` | Owned, unexpired `SearchRun` or null. |
-| `get_internal_search_run(p_run_id)` | `{payload,cancelRequested,actorKey,ownerId,guestId,networkKey,assisted}` or null. |
-| `update_search_run(p_run_id,p_payload)` | Updated `SearchRun`; terminal states cannot be overwritten. Server-verified results populate the private job catalog. |
-| `request_search_cancel(p_run_id,p_actor_key)` | Boolean. Marks the owned nonterminal run cancelled and prevents later claims. |
-| `cancel_user_searches(p_owner_id)` | Boolean. Fences all nonterminal account searches before account deletion. |
-| `reserve_provider_operation(p_run_id,p_operation_key,p_kind,p_units=1,p_source_host=null)` | `{allowed,operationId,state,reservedUsd?,reused,reason?}`. Kind is search/fetch/agent. Repeat keys are free and must retain the same kind, units, and host. |
-| `claim_provider_operation(p_operation_id,p_claim_token)` | `{claimed,state?,providerRunId?,claimToken?,reason?}`. Only the first claim may dispatch. A replay returns the original token for recovery, never another dispatch permit. |
-| `bind_provider_run(p_operation_id,p_claim_token,p_provider_run_id)` | Boolean. Persist the provider ID immediately when received. |
-| `settle_provider_operation(p_operation_id,p_claim_token,p_outcome,p_actual_usd=null,p_authoritative=false,p_terminal_verified=false)` | `{settled,state?,chargedUsd?,reservedUsd?,reused?,reason?}`. See reconciliation below. |
-| `list_provider_operations(p_run_id)` | Array including `id,claimToken,providerRunId,state,kind,reservedUsd,chargedUsd,outcome,terminalVerified`. |
-| `get_user_provider_operations(p_owner_id)` | Active/unreconciled operations for the account, including `runId`; call before deleting Auth user. |
-| `get_authorized_job(p_job_id,p_actor_key,p_search_id=null,p_owner_id=null)` | Owned `Job` or null. For saved jobs, ownership comes from `saved_jobs` and source authority from `verified_jobs`; edited browser snapshots never control the refresh destination. The Worker derives owner ID from verified Auth, not request JSON. |
-| `get_search_cache(p_fingerprint)` | Fresh `{results,sources,errors}` or null. |
-| `put_search_cache(p_fingerprint,p_payload,p_ttl_seconds=21600)` | Boolean. TTL defaults to six hours and is at most 21,600 seconds; stores only public result/source/error data, stripping preferences and identity. |
+| RPC                                                                                                                                   | Result / behavior                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `create_search_run(p_run_id,p_actor_key,p_owner_id,p_guest_id,p_network_key,p_fingerprint,p_payload,p_assisted,p_idempotency_key)`    | `{admitted,run,reused,reason?}`. Exactly one of owner and guest must be present. Replayed actor/idempotency keys return the original run before charging/counting; a changed fingerprint is rejected.                                               |
+| `get_search_run(p_run_id,p_actor_key)`                                                                                                | Owned, unexpired `SearchRun` or null.                                                                                                                                                                                                               |
+| `get_internal_search_run(p_run_id)`                                                                                                   | `{payload,cancelRequested,actorKey,ownerId,guestId,networkKey,assisted}` or null.                                                                                                                                                                   |
+| `update_search_run(p_run_id,p_payload)`                                                                                               | Updated `SearchRun`; terminal states cannot be overwritten. Server-verified results populate the private job catalog.                                                                                                                               |
+| `request_search_cancel(p_run_id,p_actor_key)`                                                                                         | Boolean. Marks the owned nonterminal run cancelled and prevents later claims.                                                                                                                                                                       |
+| `cancel_user_searches(p_owner_id)`                                                                                                    | Boolean. Fences all nonterminal account searches before account deletion.                                                                                                                                                                           |
+| `reserve_provider_operation(p_run_id,p_operation_key,p_kind,p_units=1,p_source_host=null)`                                            | `{allowed,operationId,state,reservedUsd?,reused,reason?}`. Kind is search/fetch/agent. Repeat keys are free and must retain the same kind, units, and host.                                                                                         |
+| `claim_provider_operation(p_operation_id,p_claim_token)`                                                                              | `{claimed,state?,providerRunId?,claimToken?,reason?}`. Only the first claim may dispatch. A replay returns the original token for recovery, never another dispatch permit.                                                                          |
+| `bind_provider_run(p_operation_id,p_claim_token,p_provider_run_id)`                                                                   | Boolean. Persist the provider ID immediately when received.                                                                                                                                                                                         |
+| `settle_provider_operation(p_operation_id,p_claim_token,p_outcome,p_actual_usd=null,p_authoritative=false,p_terminal_verified=false)` | `{settled,state?,chargedUsd?,reservedUsd?,reused?,reason?}`. See reconciliation below.                                                                                                                                                              |
+| `list_provider_operations(p_run_id)`                                                                                                  | Array including `id,claimToken,providerRunId,state,kind,reservedUsd,chargedUsd,outcome,terminalVerified`.                                                                                                                                           |
+| `get_user_provider_operations(p_owner_id)`                                                                                            | Active/unreconciled operations for the account, including `runId`; call before deleting Auth user.                                                                                                                                                  |
+| `get_authorized_job(p_job_id,p_actor_key,p_search_id=null,p_owner_id=null)`                                                           | Owned `Job` or null. For saved jobs, ownership comes from `saved_jobs` and source authority from `verified_jobs`; edited browser snapshots never control the refresh destination. The Worker derives owner ID from verified Auth, not request JSON. |
+| `get_search_cache(p_fingerprint)`                                                                                                     | Fresh `{results,sources,errors}` or null.                                                                                                                                                                                                           |
+| `put_search_cache(p_fingerprint,p_payload,p_ttl_seconds=21600)`                                                                       | Boolean. TTL defaults to six hours and is at most 21,600 seconds; stores only public result/source/error data, stripping preferences and identity.                                                                                                  |
 
 Actor/network keys are opaque server-generated HMACs. Use a verified Auth user ID or a signed guest cookie as the actor input; use a trusted edge-provided IP value as the network input. Never trust a request body's actor key, owner ID, forwarded-IP string, cost, units, cache status, or operation key. Keys must remain stable across Worker instances and normal restarts. A reset guest cookie cannot bypass the separate network allowance. URLs must pass the Worker's public-URL/redirect checks before a provider reservation; a syntactically valid source hostname in SQL is not an SSRF defense.
 
@@ -45,18 +53,18 @@ A cache hit still gets a persisted, owned run. `create_search_run` accepts `payl
 
 The singleton `budget_guard` row is locked first by admission, reservation, claim, cancellation, and settlement mutations. PostgreSQL holds that lock until the RPC transaction commits, so independent Workers cannot pass the same spend or concurrency check simultaneously. Unique operation keys and claim tokens prevent replayed Workflows from issuing a second provider request. Reserve each retry under a new attempt key; never reuse a successful claim to dispatch again.
 
-| Control | Default |
-| --- | --- |
-| Total public-demo envelope | USD 10, lifetime; never resets at midnight |
-| Search dispatch | USD 0.005 per attempt |
-| Fetch dispatch | USD 0.001 per URL per attempt |
-| Agent reservation | USD 2.50 per admitted start |
-| Concurrent Agents | 2 globally, 1 per source hostname |
-| Agent starts | 4 per UTC day; verified pre-execution rejections excluded |
-| Searches | Guest 3/day; account 10/day; network 20/day |
-| Assisted searches | Actor 1/day; network 3/day |
-| Source fetch allowance | 30 URL units/hour/hostname |
-| Private search read lifetime | 48 hours |
+| Control                      | Default                                                   |
+| ---------------------------- | --------------------------------------------------------- |
+| Total public-demo envelope   | USD 10, lifetime; never resets at midnight                |
+| Search dispatch              | USD 0.005 per attempt                                     |
+| Fetch dispatch               | USD 0.001 per URL per attempt                             |
+| Agent reservation            | USD 2.50 per admitted start                               |
+| Concurrent Agents            | 2 globally, 1 per source hostname                         |
+| Agent starts                 | 4 per UTC day; verified pre-execution rejections excluded |
+| Searches                     | Guest 3/day; account 10/day; network 20/day               |
+| Assisted searches            | Actor 1/day; network 3/day                                |
+| Source fetch allowance       | 30 URL units/hour/hostname                                |
+| Private search read lifetime | 48 hours                                                  |
 
 Search/Fetch reservations become charges at first dispatch claim. They remain conservatively charged if the response is lost. Agent reservations remain held after a timeout, transport failure, lost provider ID, requested cancellation, or terminal response without authoritative cost. There is no lease timeout that silently refunds an uncertain call.
 
@@ -88,7 +96,7 @@ The public configuration no longer disables the search form solely because a man
 
 ## Verification
 
-`tests/database-acceptance.sql` tests RLS, forbidden browser RPCs, import conflicts, request/operation idempotency, per-URL charges, claim replay, cancellation, uncertain reservations, source limits, safe cache reuse, budget boundaries, and deletion cascades. `tests/database-limits.sql` tests global/source Agent concurrency, retained-cost terminal states, the exact no-start fallback, daily actor/network limits, and tampered-snapshot URL isolation. `tests/database-rates.sql` tests rate-proof permissions, key separation, refresh ownership, timestamps, price caps, cooldowns, and an unchanged budget guard. `tests/rates.test.ts` covers wallet-response validation and rate preflight without live provider calls.
+`tests/database-acceptance.sql` tests RLS, forbidden browser RPCs, import conflicts, request/operation idempotency, per-URL charges, claim replay, cancellation, uncertain reservations, source limits, safe cache reuse, budget boundaries, and deletion cascades. `tests/database-limits.sql` tests global/source Agent concurrency, retained-cost terminal states, the exact no-start fallback, daily actor/network limits, and tampered-snapshot URL isolation. `tests/database-rates.sql` tests rate-proof permissions, key separation, refresh ownership, timestamps, price caps, cooldowns, and an unchanged budget guard. `tests/database-catalog.sql` checks out-of-order observations, stale cache publication, equal-timezone instants, malformed timestamps, batch duplicates, legacy entries, preserved function privileges/ownership, and unchanged budget/account state against a pre-migration snapshot. Its baseline script is test-only and must never run in a live project. `tests/rates.test.ts` covers wallet-response validation and rate preflight without live provider calls.
 
 The tests were executed using PGlite's PostgreSQL engine in an isolated in-memory database, not by applying anything to a live Supabase project. PGlite is included in the repository's development dependencies. From a clean checkout, run them without installing PostgreSQL or starting Docker:
 

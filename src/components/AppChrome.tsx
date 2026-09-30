@@ -30,9 +30,9 @@ export function AppHeader({ view, savedCount, user, navigate, setOverlay }: Head
   return (
     <header className="site-header">
       <div className="header-inner">
-        <button className="wordmark" onClick={() => navigate('find')} aria-label="FirstRole home">
+        <a className="wordmark" href="/" aria-label="FirstRole home">
           First<span>Role</span>
-        </button>
+        </a>
         <nav aria-label="Main navigation">
           <button className={view === 'find' ? 'active' : ''} onClick={() => navigate('find')}>
             Find jobs

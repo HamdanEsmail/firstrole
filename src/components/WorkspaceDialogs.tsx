@@ -14,6 +14,13 @@ import { typeLabels, workplaceLabels } from './Jobs';
 import { Modal } from './Modal';
 import type { WorkspaceOverlay, WorkspaceUser } from './AppChrome';
 import { PrivacyNoticeContent } from './PrivacyPage';
+import { sourceLabel } from '../lib/source-label';
+import {
+  availabilityLabel,
+  importantRequirements,
+  payLabel,
+  postingDateLabel,
+} from '../lib/job-brief';
 
 interface WorkspaceDialogsProps {
   overlay: WorkspaceOverlay;
@@ -90,8 +97,8 @@ export function WorkspaceDialogs({
             <ArrowRight size={16} />
           </button>
           <p className="modal-fineprint">
-            We only request your basic Google profile to identify your account. We do not read
-            your email messages or files.
+            We only request your basic Google profile to identify your account. We do not read your
+            email messages or files.
           </p>
         </Modal>
       )}
@@ -209,13 +216,33 @@ export function WorkspaceDialogs({
               <div>
                 <h3>Explore with TinyFish Agent</h3>
                 <p>
-                  When a careers page needs filters or navigation, Agent interacts with it to find
-                  the relevant openings.
+                  When a careers page needs filters or navigation and a check is available, TinyFish
+                  Agent interacts with it to find relevant openings.
                 </p>
               </div>
             </li>
             <li>
               <span>4</span>
+              <div>
+                <h3>Recover missing details when needed</h3>
+                <p>
+                  After TinyFish’s reading and any needed Agent check, optional recovery can help
+                  with a public posting that still needs clearer details. Ordinary results stay
+                  available if that extra help is unavailable.
+                </p>
+                <details className="recovery-explanation">
+                  <summary>About optional recovery</summary>
+                  <p>
+                    Firecrawl can recover public page text. Gemma through OpenRouter, or Reka when
+                    configured, can organize unclear facts using quotes from that text. Source
+                    checks and your filters still decide what appears. Account identity, application
+                    notes, and search preferences are not sent to OpenRouter.
+                  </p>
+                </details>
+              </div>
+            </li>
+            <li>
+              <span>5</span>
               <div>
                 <h3>Make an informed next step</h3>
                 <p>
@@ -230,7 +257,8 @@ export function WorkspaceDialogs({
             <span>
               New searches use a limited shared pilot allowance. Recent results can be reused for
               six hours and always show when they were checked. FirstRole never submits applications
-              for you.
+              for you or bypasses sign-in and CAPTCHA barriers. Source messages identify any
+              recovery that was actually used.
             </span>
           </div>
         </Modal>
@@ -249,19 +277,26 @@ export function WorkspaceDialogs({
                   <th>Opportunity</th>
                   {compareJobs.map((job) => (
                     <th key={job.id}>
-                      <span>{job.company}</span>
-                      {job.title}
+                      <span>{sourceLabel(job.company)}</span>
+                      {sourceLabel(job.title)}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {[
+                  ['Availability', (j: Job) => availabilityLabel(j)],
                   ['Location', (j: Job) => j.location],
                   ['Work pattern', (j: Job) => workplaceLabels[j.workplace]],
                   ['Remote region', (j: Job) => j.remoteRegion || 'Not stated'],
                   ['Type', (j: Job) => typeLabels[j.employmentType]],
-                  ['Salary', (j: Job) => j.salary?.text || 'Not listed'],
+                  ['Pay', (j: Job) => payLabel(j)],
+                  [
+                    'Before you apply',
+                    (j: Job) =>
+                      importantRequirements(j).join(' · ') || 'Check the original listing',
+                  ],
+                  ['Apply by', (j: Job) => postingDateLabel(j.deadline)],
                   [
                     'Sponsorship',
                     (j: Job) =>

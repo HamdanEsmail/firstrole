@@ -14,9 +14,17 @@ try {
     'supabase/migrations/202609290001_firstrole.sql',
     'supabase/migrations/202609290002_provider_rate_attestations.sql',
     'supabase/migrations/202609290003_rate_clock_skew.sql',
+    'tests/database-catalog-baseline.sql',
+    'supabase/migrations/202609300004_monotonic_job_facts.sql',
+    'supabase/migrations/202609300005_optional_enrichment_budgets.sql',
+    'tests/database-enrichment-provider-baseline.sql',
+    'supabase/migrations/202609300006_enrichment_provider_allowlist.sql',
     'tests/database-acceptance.sql',
     'tests/database-limits.sql',
     'tests/database-rates.sql',
+    'tests/database-catalog.sql',
+    'tests/database-enrichment.sql',
+    'tests/database-enrichment-providers.sql',
   ]) {
     const result = await db.exec(await readFile(path, 'utf8'));
     const messages = result.flatMap((r) => r.rows ?? []).filter((r) => r.result);

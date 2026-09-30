@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
 
 // Exercise the actual Worker fetch handler without starting a Cloudflare
 // Workflow or making any provider/network request.
 vi.mock('../server/workflows', () => ({ SearchWorkflow: class {}, AgentWorkflow: class {} }));
+vi.mock('../server/enrichment-workflow', () => ({ EnrichmentWorkflow: class {} }));
 vi.mock('../server/rates', () => ({ verifiedProviderEnv: vi.fn(async (env: unknown) => env) }));
 
 import worker from '../server/index';
@@ -194,6 +196,41 @@ describe('guest handshake before search admission', () => {
     expect(new Set(admissions).size).toBe(1);
     expect(runs.size).toBe(1);
     expect(durableRuns.size).toBe(1);
+    expect(env.AGENT_WORKFLOW.createBatch).not.toHaveBeenCalled();
+  });
+
+  it('reuses the verified actor hash for admission without changing actor or network identity', async () => {
+    const env = environment();
+    const config = await worker.fetch(new Request(`${origin}/api/config`), env);
+    const cookie = config.headers.get('set-cookie')!.split(';')[0];
+    const guestId = cookie.slice('firstrole_guest='.length).split('.')[0];
+    let admitted: Record<string, unknown> | undefined;
+    const database = vi.spyOn(Database.prototype, 'rpc').mockImplementation(async (name, args) => {
+      if (name === 'get_search_cache') return { results: [], sources: [], errors: [] };
+      if (name === 'create_search_run') {
+        admitted = args;
+        return { admitted: true, run: args.p_payload, reused: false };
+      }
+      throw new Error('Unexpected database call');
+    });
+    const sign = vi.spyOn(crypto.subtle, 'sign');
+    const response = await worker.fetch(searchRequest(cookie), env);
+    expect(response.status).toBe(200);
+    const actor = `guest:${guestId}`;
+    const signedMessages = sign.mock.calls.map((call) => new TextDecoder().decode(call[2]));
+    expect(signedMessages.filter((value) => value === actor)).toHaveLength(1);
+    expect(admitted?.p_actor_key).toBe(
+      createHmac('sha256', env.GUEST_COOKIE_SECRET!).update(actor).digest('base64url'),
+    );
+    expect(admitted?.p_network_key).toBe(
+      createHmac('sha256', env.GUEST_COOKIE_SECRET!)
+        .update('network:local-development')
+        .digest('base64url'),
+    );
+    expect(admitted?.p_guest_id).toBe(guestId);
+    expect(admitted?.p_owner_id).toBeNull();
+    expect(database).toHaveBeenCalledTimes(2);
+    expect(env.SEARCH_WORKFLOW.createBatch).not.toHaveBeenCalled();
     expect(env.AGENT_WORKFLOW.createBatch).not.toHaveBeenCalled();
   });
 });

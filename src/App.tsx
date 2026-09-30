@@ -8,6 +8,8 @@ import {
 } from '../shared/types';
 import { ApiError, getConfig, startSearch, getSearch, cancelSearch, refreshJob } from './lib/api';
 import { useWorkspace } from './hooks/useWorkspace';
+import { clearRecoveredPollingError, type PollingError } from './lib/polling-error';
+import { workspaceEntry } from './lib/navigation';
 import {
   AppHeader,
   AppFooter,
@@ -36,7 +38,9 @@ export default function App() {
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [configError, setConfigError] = useState(false);
   const workspace = useWorkspace(config);
-  const [view, setView] = useState<View>('find');
+  const [entry] = useState(() => workspaceEntry(window.location.search));
+  const [view, setView] = useState<View>(entry.view);
+  const signInFromLanding = useRef(entry.signIn);
   const [preferenceState, setPreferenceState] = useState<{
     scope: string;
     value: SearchPreferences;
@@ -71,6 +75,7 @@ export default function App() {
   const refreshSequence = useRef(0);
   const startLock = useRef(false);
   const refreshLock = useRef(false);
+  const lastPollError = useRef<PollingError | null>(null);
   const preferences =
     preferenceState?.scope === scope && workspaceReady
       ? preferenceState.value
@@ -149,6 +154,7 @@ export default function App() {
     refreshSequence.current += 1;
     startLock.current = false;
     refreshLock.current = false;
+    lastPollError.current = null;
     setStartingScope(null);
     setRefreshingScope(null);
     setRunState(null);
@@ -169,6 +175,18 @@ export default function App() {
       initializedOwner.current = scope;
     }
   }, [scope, workspaceReady, workspace.preferences]);
+  useEffect(() => {
+    if (!workspaceReady || !signInFromLanding.current) return;
+    signInFromLanding.current = false;
+    setOverlay(workspace.user ? 'account' : 'signin');
+    const url = new URL(window.location.href);
+    url.searchParams.delete('signin');
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }, [workspaceReady, workspace.user]);
   useEffect(() => {
     if (!workspaceReady) return;
     let disposed = false;
@@ -214,6 +232,12 @@ export default function App() {
       try {
         const next = await getSearch(runId, workspace.accessToken);
         if (!disposed && isCurrent(pollScope) && runRef.current?.id === runId) {
+          const recoveredError = lastPollError.current;
+          if (recoveredError)
+            setError((previous) =>
+              clearRecoveredPollingError(previous, recoveredError, pollScope, runId),
+            );
+          lastPollError.current = null;
           setRun((previous) => {
             if (!previous || previous.id !== runId) return previous;
             if (terminal.has(previous.status) && !terminal.has(next.status)) return previous;
@@ -223,8 +247,11 @@ export default function App() {
           setSelected((previous) => previous || next.results[0]?.id || null);
         }
       } catch (e) {
-        if (!disposed && isCurrent(pollScope) && runRef.current?.id === runId)
-          setError(errorMessage(e));
+        if (!disposed && isCurrent(pollScope) && runRef.current?.id === runId) {
+          const message = errorMessage(e);
+          lastPollError.current = { scope: pollScope, runId, message };
+          setError(message);
+        }
       } finally {
         if (!disposed && isCurrent(pollScope) && runRef.current?.id === runId)
           timer = setTimeout(poll, document.hidden ? 15000 : 4000);
@@ -312,6 +339,11 @@ export default function App() {
     setMobileDetail(false);
     setCompared([]);
     setError(null);
+    const url = new URL(window.location.href);
+    if (next === 'find') url.searchParams.delete('view');
+    else url.searchParams.set('view', next);
+    url.searchParams.delete('signin');
+    window.history.replaceState(window.history.state, '', `/app${url.search}${url.hash}`);
   }
   function choosePreset(preset: (typeof presets)[number]) {
     setPreferences({ ...DEFAULT_PREFERENCES, role: preset.role, location: preset.location });
@@ -377,7 +409,7 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell workspace-app">
       <a className="skip-link" href="#main">
         Skip to main content
       </a>

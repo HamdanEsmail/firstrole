@@ -4,29 +4,33 @@
   "main": "server/index.ts",
   "compatibility_date": "2026-09-29",
   "workers_dev": true,
+  "preview_urls": false,
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": [
-      "/api/*"
-    ]
+    "run_worker_first": ["/api/*"],
   },
   "workflows": [
     {
       "name": "firstrole-search",
       "binding": "SEARCH_WORKFLOW",
-      "class_name": "SearchWorkflow"
+      "class_name": "SearchWorkflow",
     },
     {
       "name": "firstrole-agent",
       "binding": "AGENT_WORKFLOW",
-      "class_name": "AgentWorkflow"
-    }
+      "class_name": "AgentWorkflow",
+    },
+    {
+      "name": "firstrole-details",
+      "binding": "ENRICHMENT_WORKFLOW",
+      "class_name": "EnrichmentWorkflow",
+    },
   ],
   "observability": {
     "enabled": true,
-    "head_sampling_rate": 1
+    "head_sampling_rate": 1,
   },
   "vars": {
     "TINYFISH_ENABLED": "true",
@@ -37,7 +41,12 @@
     "TINYFISH_AGENT_RATE": "0.016",
     "TINYFISH_SEARCH_RATE": "0.005",
     "TINYFISH_FETCH_RATE": "0.001",
-    "TINYFISH_RATES_VERIFIED_AT": "2026-09-29T15:45:36.145Z"
+    "TINYFISH_RATES_VERIFIED_AT": "2026-09-29T15:45:36.145Z",
+    "OPENROUTER_ENABLED": "true",
+    "OPENROUTER_PROVIDER": "nextbit/bf16",
+    "FIRECRAWL_ENABLED": "true",
+    "FIRECRAWL_FREE_PLAN_VERIFIED_AT": "2026-09-30T06:37:36.570Z",
+    "FIRECRAWL_FREE_PLAN_KEY_SHA256": "6844e6dd8e0561b2f85bf22b3a49fe941d936f25adb8e3d17cf3930f2761b6ec",
   },
-  "account_id": "7a9527c6ccbedc4fe76c02eac18a0390"
+  "account_id": "7a9527c6ccbedc4fe76c02eac18a0390",
 }

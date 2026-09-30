@@ -38,6 +38,7 @@ export function useWorkspace(config: PublicConfig | null) {
   const [session, setSession] = useState<Session | null>(null);
   const sessionRef = useRef<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [sessionClient, setSessionClient] = useState<SupabaseClient | null | undefined>(undefined);
   const [data, setData] = useState<WorkspaceData>({
     owner: null,
     saved: initialGuest.workspace.saved,
@@ -102,6 +103,7 @@ export function useWorkspace(config: PublicConfig | null) {
         );
       }
       sessionRef.current = next;
+      setSessionClient(client);
       setSession(next);
       setAuthReady(true);
     };
@@ -586,7 +588,7 @@ export function useWorkspace(config: PublicConfig | null) {
     : null;
   return {
     user,
-    ready: authReady && visibleData.loaded,
+    ready: authReady && sessionClient === client && visibleData.loaded,
     saved: visibleData.saved,
     preferences: visibleData.preferences,
     setPreferences,

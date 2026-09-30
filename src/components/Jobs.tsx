@@ -1,4 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import { sourceLabel } from '../lib/source-label';
+import { matchReasonTone } from '../lib/match-reason';
+import {
+  availabilityLabel,
+  importantRequirements,
+  payLabel,
+  postingDateLabel,
+} from '../lib/job-brief';
 import {
   Bookmark,
   Check,
@@ -11,6 +19,8 @@ import {
   AlertCircle,
   ChevronRight,
   CircleMinus,
+  Coins,
+  ClipboardList,
 } from 'lucide-react';
 import {
   APPLICATION_STATUSES,
@@ -47,13 +57,20 @@ export function CompanyMark({ company }: { company: string }) {
     </span>
   );
 }
-function StateBadge({ job }: { job: Job }) {
-  if (job.availability === 'closed') return <span className="match-badge closed">Closed</span>;
-  if (job.availability === 'unverified')
-    return <span className="match-badge neutral">Could not verify</span>;
+function AvailabilityBadge({ job }: { job: Job }) {
+  const Icon =
+    job.availability === 'open'
+      ? CheckCircle2
+      : job.availability === 'closed'
+        ? CircleMinus
+        : CircleHelp;
   return (
-    <span className={`match-badge ${job.match.tier === 'Possible match' ? 'neutral' : ''}`}>
-      {job.match.tier}
+    <span
+      className={`availability-badge availability-${job.availability}`}
+      aria-label={`Availability: ${availabilityLabel(job)}`}
+    >
+      <Icon size={13} />
+      {availabilityLabel(job)}
     </span>
   );
 }
@@ -79,32 +96,44 @@ export function JobRow({
       <button
         className="job-select"
         onClick={onSelect}
-        aria-label={`View ${job.title} at ${job.company}`}
+        aria-label={`View ${sourceLabel(job.title)} at ${sourceLabel(job.company)}`}
         aria-pressed={selected}
       >
         <CompanyMark company={job.company} />
         <span className="job-heading">
-          <span className="company-name">{job.company}</span>
-          <span className="job-title">{job.title}</span>
+          <span className="company-name">{sourceLabel(job.company)}</span>
+          <span className="job-title">{sourceLabel(job.title)}</span>
           <span className="job-location">
             <MapPin size={17} />
             {job.location}
             {job.workplace !== 'unknown' ? ` · ${workplaceLabels[job.workplace]}` : ''}
           </span>
           <span className="job-type">{typeLabels[job.employmentType]}</span>
+          <span className={`row-pay ${job.salary ? 'pay-stated' : ''}`}>
+            <Coins size={15} />
+            {payLabel(job)}
+          </span>
         </span>
       </button>
       <div className="job-match">
-        <StateBadge job={job} />
+        <AvailabilityBadge job={job} />
+        <span className="search-fit">
+          Search fit <strong>{job.match.tier}</strong>
+        </span>
         <ul>
-          {job.match.reasons.slice(0, 2).map((reason) => (
-            <li key={reason}>
-              <CheckCircle2 size={16} />
-              <span>{reason}</span>
-            </li>
-          ))}
+          {job.match.reasons.slice(0, 2).map((reason) => {
+            const tone = matchReasonTone(reason);
+            const Icon =
+              tone === 'positive' ? CheckCircle2 : tone === 'caution' ? AlertCircle : CircleHelp;
+            return (
+              <li key={reason} className={`reason-${tone}`}>
+                <Icon size={16} />
+                <span>{reason}</span>
+              </li>
+            );
+          })}
           {job.match.reasons.length === 0 && (
-            <li>
+            <li className="reason-neutral">
               <CircleHelp size={16} />
               <span>Review the requirements</span>
             </li>
@@ -118,7 +147,7 @@ export function JobRow({
         <button
           className={`icon-button bookmark-button ${saved ? 'bookmarked' : ''}`}
           onClick={onSave}
-          aria-label={`${saved ? 'Unsave' : 'Save'} ${job.title}`}
+          aria-label={`${saved ? 'Unsave' : 'Save'} ${sourceLabel(job.title)}`}
           aria-pressed={saved}
         >
           <Bookmark size={23} fill={saved ? 'currentColor' : 'none'} />
@@ -153,6 +182,7 @@ export function JobDetail({
       : job.sponsorship === 'unavailable'
         ? 'Sponsorship not available'
         : 'Sponsorship not stated';
+  const keyRequirements = importantRequirements(job);
   return (
     <aside className="detail-panel" aria-label="Job details">
       <button className="text-button mobile-back" onClick={onClose}>
@@ -162,13 +192,26 @@ export function JobDetail({
       <div className="detail-heading">
         <CompanyMark company={job.company} />
         <div>
-          <span className="company-name">{job.company}</span>
-          <h2>{job.title}</h2>
+          <span className="company-name">{sourceLabel(job.company)}</span>
+          <h2>{sourceLabel(job.title)}</h2>
           <p className="job-location">
             <MapPin size={17} />
             {job.location}
             {job.workplace !== 'unknown' ? ` · ${workplaceLabels[job.workplace]}` : ''}
           </p>
+        </div>
+      </div>
+      <div className="detail-signals">
+        <AvailabilityBadge job={job} />
+        <span className="search-fit">
+          Search fit <strong>{job.match.tier}</strong>
+        </span>
+      </div>
+      <div className="detail-pay">
+        <Coins size={19} />
+        <div>
+          <span>Pay from the listing</span>
+          <strong>{payLabel(job)}</strong>
         </div>
       </div>
       <div className="detail-actions">
@@ -181,7 +224,7 @@ export function JobDetail({
             target="_blank"
             rel="noopener noreferrer"
           >
-            Apply on company site
+            View &amp; apply
             <ExternalLink size={18} />
           </a>
         )}
@@ -199,18 +242,45 @@ export function JobDetail({
           </span>
         </div>
       )}
+      <section className="before-apply">
+        <h3>
+          <ClipboardList size={19} />
+          Before you apply
+        </h3>
+        <p>Important requirements stated by the employer.</p>
+        {keyRequirements.length ? (
+          <ul>
+            {keyRequirements.map((requirement) => (
+              <li key={requirement}>{sourceLabel(requirement)}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="requirements-unknown">
+            Check the original listing for the full requirements.
+          </p>
+        )}
+        <div className={`brief-sponsorship ${job.sponsorship}`}>
+          <span>{sponsorText}</span>
+          {job.remoteRegion && <span>Remote region: {job.remoteRegion}</span>}
+        </div>
+      </section>
       <section className="match-section">
-        <h3>Why this fits</h3>
+        <h3>How it matches your search</h3>
         <ul className="reason-list">
           {job.match.reasons.length ? (
-            job.match.reasons.map((reason) => (
-              <li key={reason}>
-                <span className="reason-icon">
-                  <Check size={14} />
-                </span>
-                <span>{reason}</span>
-              </li>
-            ))
+            job.match.reasons.map((reason) => {
+              const tone = matchReasonTone(reason);
+              const Icon =
+                tone === 'positive' ? Check : tone === 'caution' ? AlertCircle : CircleHelp;
+              return (
+                <li key={reason} className={`reason-${tone}`}>
+                  <span className={`reason-icon reason-${tone}`}>
+                    <Icon size={14} />
+                  </span>
+                  <span>{reason}</span>
+                </li>
+              );
+            })
           ) : (
             <li>
               <CircleHelp size={19} />
@@ -218,17 +288,6 @@ export function JobDetail({
             </li>
           )}
         </ul>
-        <div className={`sponsorship-note ${job.sponsorship === 'available' ? 'positive' : ''}`}>
-          <AlertCircle size={20} />
-          <div>
-            <strong>{sponsorText}</strong>
-            <span>
-              {job.sponsorship === 'not-stated'
-                ? 'The listing does not provide sponsorship information.'
-                : 'Based on the employer’s published requirements.'}
-            </span>
-          </div>
-        </div>
       </section>
       <section className="detail-section">
         <h3>At a glance</h3>
@@ -243,14 +302,12 @@ export function JobDetail({
               <dd>{job.remoteRegion}</dd>
             </>
           )}
-          <dt>Salary</dt>
-          <dd>{job.salary?.text || 'Not listed'}</dd>
           <dt>Posted</dt>
-          <dd>{job.postedAt ? new Date(job.postedAt).toLocaleDateString() : 'Not stated'}</dd>
+          <dd>{postingDateLabel(job.postedAt)}</dd>
           {job.deadline && (
             <>
               <dt>Apply by</dt>
-              <dd>{new Date(job.deadline).toLocaleDateString()}</dd>
+              <dd>{postingDateLabel(job.deadline)}</dd>
             </>
           )}
           <dt>Source</dt>
@@ -264,7 +321,7 @@ export function JobDetail({
         </p>
         {job.requirements.length > 0 && (
           <>
-            <h4>What they’re looking for</h4>
+            <h4>Requirements from the listing</h4>
             <ul className="requirements">
               {job.requirements.map((r, i) => (
                 <li key={i}>{r}</li>
@@ -331,9 +388,9 @@ export function ApplicationCard({
       <div className="application-title">
         <CompanyMark company={entry.job.company} />
         <div>
-          <span className="company-name">{entry.job.company}</span>
+          <span className="company-name">{sourceLabel(entry.job.company)}</span>
           <button className="text-button job-title" onClick={onView}>
-            {entry.job.title}
+            {sourceLabel(entry.job.title)}
           </button>
           <span className="muted">{entry.job.location}</span>
         </div>

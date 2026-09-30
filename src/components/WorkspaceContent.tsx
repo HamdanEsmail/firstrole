@@ -299,6 +299,15 @@ export function WorkspaceContent({
           </div>
         </div>
       )}
+      {view === 'find' && !starting && run?.status === 'cancelled' && (
+        <div className="notice info" role="status">
+          <Square size={18} />
+          <span>
+            <strong>Search stopped.</strong> Any results already found are still available. Your
+            saved jobs are kept.
+          </span>
+        </div>
+      )}
       {view === 'find' &&
         run &&
         !starting &&
@@ -386,7 +395,7 @@ export function WorkspaceContent({
                     entry={entry}
                     onUpdate={(patch) => workspace.update(entry.job.id, patch)}
                     onView={() => {
-                      setView('saved');
+                      navigate('saved');
                       setSelected(entry.job.id);
                       setMobileDetail(true);
                     }}
@@ -477,16 +486,20 @@ export function WorkspaceContent({
             <h2>
               {active
                 ? 'Looking for your next opportunity.'
-                : run
-                  ? 'A good match takes the right search.'
-                  : 'Your next step starts here.'}
+                : run?.status === 'cancelled'
+                  ? 'Ready when you are.'
+                  : run
+                    ? 'A good match takes the right search.'
+                    : 'Your next step starts here.'}
             </h2>
             <p>
               {active
                 ? 'We’re finding careers pages and checking the details. Results will appear here as they’re verified.'
-                : run
-                  ? 'Try a broader role, a nearby city, or fewer filters. Live availability changes, and we won’t fill the gaps with invented jobs.'
-                  : 'Choose a role and location. We’ll check the live web for opportunities worth a closer look.'}
+                : run?.status === 'cancelled'
+                  ? 'This search stopped before matching jobs were returned. Start another search whenever you’re ready.'
+                  : run
+                    ? 'Try a broader role, a nearby city, or fewer filters. Live availability changes, and we won’t fill the gaps with invented jobs.'
+                    : 'Choose a role and location. We’ll check the live web for opportunities worth a closer look.'}
             </p>
             {!run && !active && (
               <>
@@ -501,7 +514,7 @@ export function WorkspaceContent({
                 </div>
               </>
             )}
-            {run && !active && (
+            {run && !active && run.status !== 'cancelled' && (
               <button
                 className="button secondary"
                 onClick={() => {

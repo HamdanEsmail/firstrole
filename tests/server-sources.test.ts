@@ -21,6 +21,100 @@ const preferences: SearchPreferences = {
 };
 
 describe('live-discovery source selection regressions', () => {
+  it('excludes beBee from future Agent candidates after identifying it as an aggregator', () => {
+    const requested = { ...preferences, keywords: 'AECOM' };
+    expect(discoveryQueries(requested)[0].options.excludeDomains).toContain('bebee.com');
+    expect(
+      selectAgentSource(
+        [
+          {
+            url: 'https://bebee.com/us/jobs/civil-engineering-intern-aecom',
+            readable: true,
+            blocked: false,
+            closed: false,
+            incomplete: true,
+          },
+        ],
+        requested,
+      ),
+    ).toBeUndefined();
+  });
+  it('keeps a relevant official employer portal whose hostname matches the optional company keyword', () => {
+    const requested = {
+      ...preferences,
+      role: 'Civil engineering',
+      location: 'United States',
+      keywords: 'AECOM',
+    };
+    const official = {
+      url: 'https://aecom.jobs/locations/usa/jobs/',
+      title: 'AECOM Civil engineering internships United States',
+      snippet: 'Search civil engineering internship openings in the United States.',
+    };
+    const details = ['one', 'two', 'three', 'four'].map((company) => ({
+      url: `https://jobs.lever.co/${company}/12345678-abcd-1234-abcd-123456789abc`,
+      title: 'Civil Engineering Intern United States',
+      snippet: 'An internship with US engineering teams.',
+    }));
+    const selected = selectSourceUrls([...details, official], requested);
+    expect(selected).toHaveLength(4);
+    expect(selected[0]).toBe(official.url);
+  });
+  it('uses optional employer keywords without requiring a company name in the role', () => {
+    const requested = { ...preferences, keywords: 'AECOM' };
+    expect(discoveryQueries(requested)[0].query).toContain('AECOM');
+    const readings = [
+      {
+        url: 'https://jobs.lever.co/example',
+        readable: true,
+        blocked: false,
+        closed: false,
+        incomplete: true,
+      },
+      {
+        url: 'https://aecom.jobs/locations/usa/jobs/',
+        readable: true,
+        blocked: false,
+        closed: false,
+        incomplete: true,
+      },
+    ];
+    expect(selectAgentSource(readings, requested)).toBe(readings[1].url);
+  });
+  it('does not spend Agent on aggregators or a portal already served by verified followup jobs', () => {
+    const employer = 'https://aecom.jobs/locations/usa/jobs/';
+    expect(
+      selectAgentSource(
+        [
+          { url: employer, readable: true, blocked: false, closed: false, incomplete: true },
+          {
+            url: 'https://prosple.com/software-engineering-graduate-jobs-usa',
+            readable: true,
+            blocked: false,
+            closed: false,
+            incomplete: true,
+          },
+        ],
+        preferences,
+        [employer],
+      ),
+    ).toBeUndefined();
+  });
+  it('recognizes the captured KBR missing-page shell before an Agent can be selected', () => {
+    expect(listingClosed("The page you are looking for doesn't exist.")).toBe(true);
+    expect(listingClosed('The page you are looking for doesn’t exist.')).toBe(true);
+    expect(
+      selectAgentSource([
+        {
+          url: 'https://kbr.wd5.myworkdayjobs.com/jobs/123',
+          readable: true,
+          blocked: false,
+          closed: listingClosed("The page you are looking for doesn't exist."),
+          incomplete: true,
+        },
+      ]),
+    ).toBeUndefined();
+  });
   it('does not re-fetch an observed SmartRecruiters job solely because it has trid tracking', () => {
     const url = 'https://jobs.smartrecruiters.com/EgisGroup/744000123456789-graduate-engineer';
     expect(

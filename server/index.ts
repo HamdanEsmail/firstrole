@@ -7,8 +7,10 @@ import { json, requestJson, safeMessage, sha256 } from './http';
 import { fingerprintInput, validatePreferences, verifyJob } from './quality';
 import { TinyFish } from './tinyfish';
 import { verifiedProviderEnv } from './rates';
+import { hydrateTerminalSearch } from './freshness';
 
 export { SearchWorkflow, AgentWorkflow } from './workflows';
+export { EnrichmentWorkflow } from './enrichment-workflow';
 
 const UUID = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 const TERMINAL = new Set<SearchRun['status']>(['completed', 'partial', 'failed', 'cancelled']);
@@ -40,12 +42,12 @@ async function createOwnedRun(
   env: Env,
   request: Request,
   owner: Owner,
+  actorKey: string,
   run: SearchRun,
   fingerprint: string,
   assisted: boolean,
   idempotency: string,
 ): Promise<{ run: SearchRun; reused: boolean }> {
-  const actorKey = await pseudonym(owner.key, env);
   const networkKey = await pseudonym(
     `network:${request.headers.get('cf-connecting-ip') || 'local-development'}`,
     env,
@@ -196,6 +198,7 @@ export default {
           env,
           request,
           owner,
+          actorKey,
           candidate,
           fingerprint,
           !cached,
@@ -207,7 +210,8 @@ export default {
             { id: admitted.run.id, params: { searchId: admitted.run.id } },
           ]);
         }
-        return json(presentRun(admitted.run), admitted.run.cached ? 200 : 202, headers);
+        const current = await hydrateTerminalSearch(admitted.run, db);
+        return json(presentRun(current), admitted.run.cached ? 200 : 202, headers);
       }
 
       const searchMatch = url.pathname.match(/^\/api\/searches\/([^/]+)(\/cancel)?$/);
@@ -221,7 +225,8 @@ export default {
             'This search has expired or belongs to another browser. Start a new search to continue.',
             404,
           );
-        if (request.method === 'GET' && !searchMatch[2]) return json(presentRun(run), 200, headers);
+        if (request.method === 'GET' && !searchMatch[2])
+          return json(presentRun(await hydrateTerminalSearch(run, db)), 200, headers);
         if (request.method === 'POST' && searchMatch[2]) {
           if (!TERMINAL.has(run.status)) {
             await db.rpc('request_search_cancel', { p_run_id: id, p_actor_key: actorKey });
@@ -268,6 +273,7 @@ export default {
           env,
           request,
           owner,
+          actorKey,
           run,
           await sha256(`refresh:${job.id}`),
           false,

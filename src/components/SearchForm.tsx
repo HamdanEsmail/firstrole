@@ -162,10 +162,10 @@ export function SearchForm({ value, onChange, onSearch, busy }: Props) {
       {expanded && (
         <div className="extra-filters" id="extra-filters">
           <label className="field">
-            <span>Skills to prioritize</span>
+            <span>Skills or keywords</span>
             <input
               maxLength={180}
-              placeholder="e.g. SQL, Excel, research"
+              placeholder="e.g. SQL, Excel, or a company"
               value={value.keywords}
               onChange={(e) => set('keywords', e.target.value)}
             />

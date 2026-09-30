@@ -17,3 +17,13 @@ TINYFISH_AGENT_RATE="0.016"
 TINYFISH_SEARCH_RATE="0.005"
 TINYFISH_FETCH_RATE="0.001"
 GOOGLE_AUTH_ENABLED="false"
+# Optional helpers. TinyFish remains the discovery/read/interaction provider.
+OPENROUTER_ENABLED="false"
+OPENROUTER_API_KEY=""
+OPENROUTER_PROVIDER="nextbit/bf16"
+FIRECRAWL_ENABLED="false"
+FIRECRAWL_API_KEY=""
+# Check the Firecrawl account is Free with no automatic purchases. The attestation
+# is key-bound and expires after 30 days; runtime also checks the free-sized allowance.
+FIRECRAWL_FREE_PLAN_VERIFIED_AT=""
+FIRECRAWL_FREE_PLAN_KEY_SHA256=""

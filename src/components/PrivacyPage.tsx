@@ -36,6 +36,12 @@ export function PrivacyNoticeContent({ headingLevel = 'h2' }: PrivacyNoticeConte
         stored so you can resume a search. Public job results may be reused for up to six hours with
         their original check times; your private notes are not included in those shared results.
       </p>
+      <p>
+        After TinyFish’s checks, optional Firecrawl reading and source-text extraction through
+        OpenRouter or Reka can help recover unclear details from public postings. OpenRouter
+        receives public posting text, without your account identity, application notes, or search
+        preferences. FirstRole stops at sign-in and CAPTCHA barriers instead of bypassing them.
+      </p>
       <Heading>Search and usage records</Heading>
       <p>
         FirstRole retains search state and limited usage and provider-operation records to support

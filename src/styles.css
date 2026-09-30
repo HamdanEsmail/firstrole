@@ -2700,3 +2700,19 @@ ul {
     display: none;
   }
 }
+
+/* Unknown or failed checks retain their text without positive-evidence styling. */
+.job-match li.reason-caution svg {
+  color: #94640d;
+}
+.job-match li.reason-neutral svg {
+  color: var(--muted);
+}
+.reason-icon.reason-caution {
+  color: #94640d;
+  background: #fff3dc;
+}
+.reason-icon.reason-neutral {
+  color: var(--muted);
+  background: #edf1f7;
+}

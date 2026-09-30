@@ -3,6 +3,7 @@ import type { Job, SearchPreferences } from '../shared/types';
 import { boundedJson, safePublicUrl } from '../server/http';
 import {
   deduplicate,
+  deadlinePassed,
   eligible,
   extractPageJob,
   fingerprintInput,
@@ -51,6 +52,30 @@ function fixture(extra: Partial<Job> = {}): Job {
   };
 }
 
+describe('source-evidenced closing dates', () => {
+  it('excludes past closing dates while treating the stated closing day as inclusive', () => {
+    const now = Date.parse('2026-09-30T15:00:00Z');
+    expect(deadlinePassed('2026-09-29T00:00:00Z', now)).toBe(true);
+    expect(deadlinePassed('2026-09-30T00:00:00Z', now)).toBe(false);
+    expect(deadlinePassed(null, now)).toBe(false);
+    expect(deadlinePassed('unreadable', now)).toBe(false);
+    expect(eligible(fixture({ deadline: '2000-01-01T00:00:00Z' }), preferences)).toBe(false);
+  });
+
+  it('does not call an expired listing open merely because an Apply button remains', () => {
+    const result = verifyJob(
+      fixture({ deadline: '2000-01-01T00:00:00Z' }),
+      {
+        url: sourceUrl,
+        text: '# Junior Data Analyst\nApplication deadline: 2000-01-01\nApply now',
+      },
+      preferences,
+    );
+    expect(result.deadline).toBeTruthy();
+    expect(result.availability).toBe('closed');
+  });
+});
+
 describe('source integrity and response bounds', () => {
   it.each([
     'http://example.com/jobs/1',
@@ -81,6 +106,19 @@ describe('source integrity and response bounds', () => {
 });
 
 describe('preferences and fit', () => {
+  it('matches company and qualification keywords as preferences without weakening required filters', () => {
+    const job = fixture({
+      company: 'AECOM',
+      description: 'Prepare technical plans.',
+      requirements: ['Experience with SQL and BIM.'],
+    });
+    const withKeywords = { ...preferences, keywords: 'SQL BIM AECOM' };
+    expect(scoreJob(job, withKeywords).reasons).toContain('Mentions sql, bim, aecom');
+    expect(scoreJob(job, withKeywords).score).toBeGreaterThan(
+      scoreJob(job, { ...preferences, keywords: '' }).score,
+    );
+    expect(eligible({ ...job, availability: 'closed' }, withKeywords)).toBe(false);
+  });
   it('keeps cache identity after PostgreSQL JSONB reorders preference properties', () => {
     const apiPreferences = validatePreferences(preferences);
     const storedPreferences = Object.fromEntries(
@@ -418,6 +456,145 @@ describe('source-grounded listing normalization', () => {
     const closed = fixture({ availability: 'closed', checkedAt: '2026-09-29T11:00:00Z' });
     expect(deduplicate([fixture(), closed])[0].availability).toBe('closed');
   });
+  it('preserves distinct same-title/location seasonal internships without requisition IDs', () => {
+    const summerUrl = 'https://boards.greenhouse.io/example/jobs/1111';
+    const winterUrl = 'https://boards.greenhouse.io/example/jobs/2222';
+    const summer = fixture({
+      title: 'Software Engineering Intern',
+      requisitionId: null,
+      sourceUrl: summerUrl,
+      applyUrl: summerUrl,
+      description: 'Summer internship.',
+    });
+    const winter = fixture({
+      id: 'b'.repeat(64),
+      title: summer.title,
+      requisitionId: null,
+      sourceUrl: winterUrl,
+      applyUrl: winterUrl,
+      description: 'Winter internship.',
+    });
+    expect(deduplicate([summer, winter])).toHaveLength(2);
+    expect(deduplicate([winter, summer])).toHaveLength(2);
+  });
+  it('merges canonical source observations despite tracking, query order, or corrected requisitions', () => {
+    const first = fixture({
+      requisitionId: 'OLD123',
+      sourceUrl: 'https://careers.example.com/jobs/123/?locale=en&job_id=123&utm_source=board',
+    });
+    const latest = fixture({
+      id: 'b'.repeat(64),
+      requisitionId: 'NEW456',
+      sourceUrl: 'https://careers.example.com/jobs/123?job_id=123&locale=en',
+      checkedAt: '2026-09-29T12:00:00Z',
+      availability: 'closed',
+    });
+    expect(deduplicate([first, latest])).toEqual([latest]);
+    expect(deduplicate([latest, first])).toEqual([latest]);
+  });
+  it('keeps employer requisitions distinct across different companies', () => {
+    const one = fixture({
+      company: 'Employer One',
+      sourceUrl: 'https://one.example/jobs/123',
+      applyUrl: 'https://one.example/jobs/123',
+    });
+    const two = fixture({
+      company: 'Employer Two',
+      id: 'b'.repeat(64),
+      sourceUrl: 'https://two.example/jobs/123',
+      applyUrl: 'https://two.example/jobs/123',
+    });
+    expect(deduplicate([one, two])).toHaveLength(2);
+  });
+  it.each([
+    'https://careers.example.com/',
+    'https://careers.example.com/jobs',
+    'https://careers.example.com/apply',
+    'https://careers.example.com/jobs/apply',
+    'https://careers.example.com/jobs/search',
+    'https://careers.example.com/apply/step1',
+  ])('never aliases separate jobs through the general application destination %s', (applyUrl) => {
+    const first = fixture({ requisitionId: null, applyUrl });
+    const second = fixture({
+      id: 'b'.repeat(64),
+      requisitionId: null,
+      sourceUrl: 'https://careers.example.com/jobs/456',
+      applyUrl,
+    });
+    expect(deduplicate([first, second])).toHaveLength(2);
+  });
+  it('merges corroborated individual application destinations, including a detail/apply pair', () => {
+    const direct = fixture({ requisitionId: null });
+    const mirror = fixture({
+      id: 'b'.repeat(64),
+      requisitionId: null,
+      sourceUrl: 'https://other.example/jobs/mirrored-opening',
+      applyUrl: `${sourceUrl}/apply`,
+      checkedAt: '2026-09-29T12:00:00Z',
+    });
+    expect(deduplicate([direct, mirror])).toEqual([mirror]);
+  });
+  it('does not merge an unverified application claim without observed link evidence', () => {
+    const direct = fixture({ requisitionId: null });
+    const mirror = fixture({
+      id: 'b'.repeat(64),
+      requisitionId: null,
+      sourceUrl: 'https://other.example/jobs/mirrored-opening',
+      applyUrl: `${sourceUrl}/apply`,
+      availability: 'unverified',
+    });
+    expect(deduplicate([direct, mirror])).toHaveLength(2);
+    const observed = {
+      ...mirror,
+      evidence: [
+        { field: 'applyUrl', text: 'Apply for this position', sourceUrl: mirror.applyUrl },
+      ],
+    };
+    expect(deduplicate([direct, observed])).toEqual([direct]);
+  });
+  it('blocks a shared application alias when distinct requisitions make it ambiguous', () => {
+    const applyUrl = 'https://ats.example/jobs/123/apply';
+    const first = fixture({
+      sourceUrl: 'https://one.example/jobs/111',
+      requisitionId: '111',
+      applyUrl,
+    });
+    const second = fixture({
+      id: 'b'.repeat(64),
+      sourceUrl: 'https://two.example/jobs/222',
+      requisitionId: '222',
+      applyUrl,
+    });
+    const unknown = fixture({
+      id: 'c'.repeat(64),
+      sourceUrl: 'https://three.example/jobs/333',
+      requisitionId: null,
+      applyUrl,
+    });
+    expect(deduplicate([first, second, unknown])).toHaveLength(3);
+    expect(deduplicate([unknown, second, first])).toHaveLength(3);
+  });
+  it('preserves transitive concrete aliases even when the preferred snapshot changes', () => {
+    const first = fixture({
+      sourceUrl: 'https://one.example/jobs/111',
+      applyUrl: 'https://one.example/jobs/111',
+    });
+    const second = fixture({
+      id: 'b'.repeat(64),
+      sourceUrl: 'https://two.example/jobs/222',
+      applyUrl: 'https://two.example/jobs/222',
+    });
+    const third = fixture({
+      id: 'c'.repeat(64),
+      requisitionId: null,
+      sourceUrl: 'https://three.example/jobs/333',
+      applyUrl: `${second.sourceUrl}/apply`,
+      availability: 'closed',
+      checkedAt: '2026-09-29T12:00:00Z',
+    });
+    expect(deduplicate([first, second, third])).toEqual([third]);
+    expect(deduplicate([third, second, first])).toEqual([third]);
+  });
   it.each([
     'Sponsorship is not available.',
     'Sponsorship for U.S. employment authorization is not available for this position.',
@@ -440,6 +617,80 @@ describe('source-grounded listing normalization', () => {
     expect(
       isJobDetail('https://aecom.jobs/dubai-are/intern/4A39A1BE369F439888FCF645D85C9C42/job/'),
     ).toBe(true);
+  });
+  it('reads SmartRecruiters bullet metadata and prefers the job location over a recruiting-event city', async () => {
+    const url =
+      'https://jobs.smartrecruiters.com/AECOM2/744000150786409-civil-highway-engineer-intern-hiring-event-with-aecom-philadelphia';
+    const text = `# Civil/Highway Engineer Intern - Hiring Event with AECOM - Philadelphia
+* Intern
+* Legal Entity: AECOM Technical Services Inc
+* Work Location Model: Hybrid
+* Location: Philadelphia, Pennsylvania
+* Primary Location: US - Newark, DE - 248 Chapman Rd
+* Compensation: USD 21 - USD 26 - hourly
+## Company Description
+Work with Us. Change the World.
+## Job Description
+AECOM is hosting a hiring event in Philadelphia.
+AECOM is seeking a Highway Engineer Intern to be based in Newark, Delaware.
+You will prepare roadway designs and engineering calculations.
+## Qualifications
+* Candidates must be pursuing a degree in Civil Engineering.
+## Additional Information
+* Sponsorship for US employment authorization is not available now or in the future.
+I'm interested`;
+    const prefs = {
+      ...preferences,
+      role: 'Civil engineering',
+      location: 'United States',
+      jobTypes: ['internship' as const],
+      workplaces: ['hybrid' as const],
+    };
+    const page = {
+      url,
+      title: 'Civil/Highway Engineer Intern - Hiring Event with AECOM - Philadelphia',
+      text,
+      links: [],
+    };
+    const job = await extractPageJob(page, prefs);
+    expect(job).toMatchObject({
+      company: 'AECOM Technical Services Inc',
+      location: 'US - Newark, DE - 248 Chapman Rd',
+      workplace: 'hybrid',
+      employmentType: 'internship',
+      sponsorship: 'unavailable',
+      salary: { text: 'USD 21 - USD 26 - hourly', currency: 'USD', period: 'hourly' },
+    });
+    expect(job!.location).not.toContain('Philadelphia');
+    expect(eligible(job!, prefs)).toBe(true);
+    expect(eligible(job!, { ...prefs, location: 'Philadelphia' })).toBe(false);
+    expect(eligible(job!, { ...prefs, sponsorshipRequired: true })).toBe(false);
+    expect(job!.evidence).toContainEqual({
+      field: 'company',
+      text: 'AECOM Technical Services Inc',
+      sourceUrl: url,
+    });
+    const refreshed = verifyJob(
+      { ...job!, company: 'AECOM2', location: 'Philadelphia', workplace: 'unknown' },
+      page,
+      prefs,
+    );
+    expect(refreshed).toMatchObject({
+      company: 'AECOM Technical Services Inc',
+      location: 'US - Newark, DE - 248 Chapman Rd',
+      workplace: 'hybrid',
+    });
+  });
+  it('does not borrow bullet metadata from a related-job card', async () => {
+    const page = {
+      url: 'https://jobs.smartrecruiters.com/Example/744000150786410-engineering-intern',
+      title: 'Engineering Intern',
+      text: '# Engineering Intern\n## Job Description\nBuild engineering tools.\n## Related jobs\n# Engineering Intern in Dubai\n* Primary Location: Dubai, United Arab Emirates\n* Legal Entity: Unrelated Employer Inc\n* Work Location Model: Hybrid',
+    };
+    const parsed = await extractPageJob(page, { ...preferences, role: 'Engineering' });
+    expect(parsed?.location).toBe('Location not stated');
+    expect(parsed?.company).not.toBe('Unrelated Employer Inc');
+    expect(parsed?.workplace).toBe('unknown');
   });
   it('parses Workday markdown headings and location labels', async () => {
     const url = 'https://pjtpartners.wd1.myworkdayjobs.com/Students/job/Dubai/Analyst_R123';

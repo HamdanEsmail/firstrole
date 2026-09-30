@@ -2,6 +2,8 @@ import type { Job, SearchRun } from '../shared/types';
 import { AppError, type Env } from './env';
 import { boundedJson } from './http';
 
+export const MAX_JOB_FACTS = 12;
+
 export interface InternalRun {
   payload: SearchRun;
   cancelRequested: boolean;
@@ -55,6 +57,48 @@ export class Database {
 
   get(id: string, actorKey: string): Promise<SearchRun | null> {
     return this.rpc('get_search_run', { p_run_id: id, p_actor_key: actorKey });
+  }
+  async latestVerifiedJobs(jobIds: readonly string[]): Promise<Job[]> {
+    const ids = [...new Set(jobIds.filter((id) => /^[a-f\d]{64}$/i.test(id)))].slice(
+      0,
+      MAX_JOB_FACTS,
+    );
+    if (!ids.length) return [];
+    if (!this.env.SUPABASE_URL || !this.env.SUPABASE_SERVICE_ROLE_KEY)
+      throw new AppError('SETUP_REQUIRED', 'Search storage is not configured yet.', 503);
+    const url = new URL(`${this.env.SUPABASE_URL}/rest/v1/verified_jobs`);
+    url.searchParams.set('select', 'job_id,job');
+    url.searchParams.set('job_id', `in.(${ids.join(',')})`);
+    url.searchParams.set('limit', String(ids.length));
+    const response = await fetch(url, {
+      headers: {
+        accept: 'application/json',
+        apikey: this.env.SUPABASE_SERVICE_ROLE_KEY,
+        authorization: `Bearer ${this.env.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      // workerd supports manual/follow only; !ok rejects redirects without forwarding secrets.
+      redirect: 'manual',
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new AppError(
+        'STORAGE_UNAVAILABLE',
+        'The latest listing checks could not be loaded. Please try again.',
+        503,
+      );
+    }
+    const rows = await boundedJson<{ job_id: string; job: Job }[]>(response, 512 * 1024);
+    if (!Array.isArray(rows) || rows.length > MAX_JOB_FACTS)
+      throw new AppError(
+        'STORAGE_UNAVAILABLE',
+        'The latest listing checks could not be read.',
+        503,
+      );
+    const allowed = new Set(ids);
+    return rows.flatMap((row) =>
+      row && allowed.has(row.job_id) && row.job?.id === row.job_id ? [row.job] : [],
+    );
   }
   internal(id: string): Promise<InternalRun | null> {
     return this.rpc('get_internal_search_run', { p_run_id: id });
