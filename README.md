@@ -4,8 +4,6 @@ A job finder and application workspace for students and recent graduates. FirstR
 
 **Public demo:** [Open FirstRole](https://firstrole.hamdanesmail12-7a9.workers.dev). **Source:** [HamdanEsmail/firstrole](https://github.com/HamdanEsmail/firstrole).
 
-**Verified so far:** live US results from Intel, Katalyst, and Medtronic; Google sign-in and persistence; guest cache reuse and duplicate-save import; 41 real Supabase ownership checks; and deletion through the deployed Worker. The latest complete check passed 144 unit tests, all database suites, TypeScript, and the production build. Release `83c01bee-7526-4117-a991-1bfed1eaf6f4` also passed the no-spend guest-cookie handshake check. The final UAE search returned an Egis Graduate Mechanical Engineer – MEP listing with its UAE National/Family Book requirement preserved and availability clearly marked Could not verify. A successful, useful Agent interaction remains unverified. See [verification status](docs/qa.md) and the [submission package](docs/submission.md).
-
 ![FirstRole live US search with verified Katalyst and Medtronic opportunities](artifacts/screenshots/live-search-us-desktop.png)
 
 ## What the app does
@@ -47,11 +45,11 @@ For UI verification with fictional test data, use this separate development mode
 npm run dev:ui-test
 ```
 
-Open `http://127.0.0.1:5174` in Edge. The page carries **UI TEST · FICTIONAL LISTINGS · NO LIVE API CALLS**. Its fixture middleware is enabled only while serving this explicit test mode; it is excluded from production builds. Never present fixture screenshots or results as live bounty evidence.
+Open `http://127.0.0.1:5174` in Edge. The page carries **UI TEST · FICTIONAL LISTINGS · NO LIVE API CALLS**. Its fixture middleware is enabled only while serving this explicit test mode; it is excluded from production builds. The fixtures are for local interface checks and are never included as production search results.
 
 ## Connect Supabase, TinyFish, and hosting
 
-The intended pilot uses **Cloudflare Workers/Workflows and Supabase free plans**, a free `workers.dev` address, and no additional language-model provider. No paid domain, subscription, or automatic credit top-up is required by this implementation. Confirm the selected accounts remain on their free plans before enabling a public deployment.
+FirstRole targets **Cloudflare Workers/Workflows and Supabase free plans**, a free `workers.dev` address, and no additional language-model provider. No paid domain, subscription, or automatic credit top-up is required by this implementation. Confirm the selected accounts remain on their free plans before enabling a public deployment.
 
 1. Create a new Supabase project and apply all three SQL files in `supabase/migrations` in filename order. They create the workspace, budget controls, and private provider-rate cache. Read [database setup and spending controls](supabase/README.md). The isolated test bootstrap is never a production migration.
 2. Create an ignored `.dev.vars` file for local Worker configuration. Set corresponding configuration and secrets on the deployed Worker. Use the variable reference below.
@@ -96,14 +94,16 @@ Automatic rate proofs are private, expire after six hours, and are keyed by the 
 
 ## How live discovery works
 
-| Stage    | Meaningful TinyFish use                                                                                          | Current implementation bound                                                                                                  |
-| -------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Discover | **Search** finds career pages and individual listings using the submitted role, location, and opportunity types. | Two discovery queries.                                                                                                        |
-| Read     | **Fetch** reads career pages and parses supported direct listings, preserving their original links.              | Four initial source pages, favoring different hosts.                                                                          |
-| Interact | **Agent** searches or filters a selected careers site and visits individual listings to extract evidence.        | One Agent execution per assisted search, with a 120-second provider duration setting and at most twelve extracted candidates. |
-| Verify   | **Fetch** rechecks selected unverified candidates on their original pages.                                       | Up to four follow-up listing reads, or two after the schema-entitlement fallback.                                             |
+| Stage    | Meaningful TinyFish use                                                                                          | Current implementation bound                                                                                    |
+| -------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Discover | **Search** finds career pages and individual listings using the submitted role, location, and opportunity types. | Up to three discovery queries.                                                                                  |
+| Read     | **Fetch** reads career pages and parses supported direct listings, preserving their original links.              | Four initial pages, favoring different hosts, plus up to two observed listing links.                            |
+| Interact | **Agent** searches or filters an employer site only when ordinary reading is insufficient.                       | One Agent execution per eligible assisted search, a 120-second execution setting, and one extracted opening.    |
+| Verify   | **Fetch** checks the new Agent-produced opening on its original page.                                            | At most one read; already-open results from earlier Fetch calls are not rechecked just to exercise an endpoint. |
 
 The schema fallback is allowed only after a conclusive pre-execution schema-access rejection. An uncertain submission is never automatically resubmitted. The second Workflow handles the Agent lifecycle independently of an open browser.
+
+The pilot allows up to eight minutes for provider startup and completion through eight scheduled status reads, sixty seconds apart. Database cancellation checks occur every thirty seconds, and the Cancel action also requests provider cancellation directly. This waiting allowance does not raise the 120-second provider execution setting or the $2.50 reservation. If cancellation races with successful completion, the existing result is retrieved without another submission. Known aggregators, explicit missing-page shells, and employer portals already covered by verified followup results are excluded from Agent selection.
 
 Structured jobs retain source and application URLs, requisition identifiers, salary units, dates, geographic restrictions, and supporting text when available. Deduplication prioritizes employer/requisition identity and canonical URLs. Matching applies the chosen requirements and ranks relevant jobs with understandable reasons rather than an invented hiring probability.
 
@@ -111,11 +111,9 @@ Recent matching searches may be reused for six hours; each job retains its actua
 
 ### Budget controls
 
-The database starts with a **$10 lifetime envelope** for the approved implementation testing and public pilot. Before enabling it, account for any TinyFish calls made outside the application ledger during setup: reduce the application's remaining limit by those confirmed costs. Never treat a fresh database as a fresh spending authorization.
+The default deployment has a **$10 lifetime search budget**. All provider dispatches share that limit. If setup calls are made outside the application ledger, include those costs when setting the remaining deployment allowance.
 
 Each provider call requires an atomic database reservation and a unique dispatch claim. Search reserves $0.005/query, Fetch reserves $0.001/URL, and Agent reserves $2.50/start. Unknown Agent costs remain reserved until authoritative reconciliation. Terminal status can release a concurrency slot without releasing the financial reservation. A duration limit alone is not the spending cap.
-
-At the last reported pilot-ledger check, the lifetime limit was **$10**, recorded spend was **$0.135**, and **$5 remained reserved** for two terminal Agent attempts that produced no usable jobs. Those holds have not been treated as refunds. This is a recorded snapshot, not a live balance or proof of final provider billing; preserve the reservations until authoritative charges can be reconciled.
 
 The current defaults allow two simultaneous Agents globally, one per source hostname, four Agent starts per UTC day, and one assisted search per actor per day. Separate guest/account/network limits protect the shared allowance. The lifetime envelope takes precedence over these daily limits. Saved jobs and eligible cached searches remain available when paid work is paused.
 
@@ -137,8 +135,12 @@ Guest API access uses an HttpOnly signed cookie. Configuration establishes that 
 
 `src` contains the React interface and account client. `server` contains the Worker, Workflows, TinyFish adapter, and job-quality rules. `shared` defines the typed contracts. `supabase` contains the migration and database operating notes. `tests` contains unit, isolated database, and explicitly separated UI fixtures.
 
-## Verification and remaining release work
+## Validation and limitations
 
-Automated tests cover extraction and matching, missing fields, closure evidence, deduplication, provider request bounds, unknown Agent outcomes, ownership policies, private RPC permissions, spending limits, retry claims, guest imports, and account API behavior. The current evidence and its limits are recorded in [QA](docs/qa.md).
+Run `npm run check` for TypeScript, unit tests, isolated PostgreSQL tests, and the production build. The provider tests use recorded or mocked responses; the database suites run in PGlite without touching a live project. Tests cover matching and source evidence, ownership policies, guest imports, idempotency, bounded requests, budget admission, and uncertain Agent outcomes.
 
-Multiple-employer US results are verified: the corrected fresh search returned open Katalyst and Medtronic roles, alongside the earlier Intel result. The final UAE search returned an Egis Graduate Mechanical Engineer – MEP listing in Dubai, with its UAE National/Family Book requirement preserved. That search is partial because a source was blocked, and Egis availability is explicitly Could not verify; it is not presented as a confirmed open role. Earlier UAE engineering and Finance/Dubai empty results remain recorded. The outstanding endpoint acceptance check is a successful, useful Agent interaction under the normal daily allowance; no reset or bypass is planned. Simultaneous budget-admission checks and CPU headroom measurement also remain open. Cache reuse, guest import, sign-out isolation, deployed refresh, account ownership, and deletion have evidence. Finish the walkthrough and review the unpublished [submission package](docs/submission.md).
+The opt-in scripts under `tests/integration` check a configured deployment. Account mutation checks create disposable QA users and remove them; read the script and target configuration before running one. Setup and operating guidance is available in [Accounts](docs/accounts.md), [Deployment](docs/deployment.md), and [Database](supabase/README.md).
+
+Source coverage depends on the employer's site and provider access. A portal may block automated reading, and an Agent interaction may return no usable listings. FirstRole displays partial coverage and unverified availability explicitly. Search results reflect the source at the recorded check time and cannot guarantee that a position is still open or that an applicant meets every requirement.
+
+Cached results and browser-local saves remain usable when new paid work is paused. Free hosting/database quotas, source availability, and the configured shared allowance can limit new searches. Measure deployed Worker CPU and request usage before increasing the bounds; workflow elapsed time does not establish CPU headroom.

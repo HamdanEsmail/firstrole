@@ -9,3 +9,4 @@ dist/
 coverage/
 artifacts/private/
 supabase/.temp/
+private-handoff/

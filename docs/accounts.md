@@ -2,7 +2,7 @@
 
 FirstRole works without an account. Google sign-in adds a private, synchronized workspace using Supabase Auth and PostgreSQL. The application does not ask for a password, mailbox access, Google Drive access, or a paid authentication subscription.
 
-The account implementation has live evidence: Google sign-in and reload persistence, saved-job readback in a second tab, sign-out isolation, guest save persistence, a duplicate guest import preserving the account's existing records, 41 checks against the actual Supabase ownership policies, and account deletion through the deployed Worker using one disposable QA account. Those checks are separate from the local unit suite. A second physical device has not been claimed as tested. See [the current QA record](qa.md) for verified scenarios and remaining release gates.
+Account access uses the authenticated Supabase user identity. Browser queries are restricted by row ownership, and privileged orchestration stays in the Worker. The sections below cover setup, storage behavior, and checks for a configured deployment.
 
 ## What is stored
 
