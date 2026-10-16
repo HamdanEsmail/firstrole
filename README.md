@@ -20,7 +20,7 @@ The desktop interface places the shortlist beside the selected job. On a narrow 
 
 ## Run locally
 
-Use a current Node.js release supported by the locked Vite and Wrangler versions, and npm. Node 22.12 or later is a practical baseline. Dependencies are locked in `package-lock.json`; use `npm ci` for a reproducible install.
+Use Node.js 24 with its bundled npm 11 (`.nvmrc` pins it; CI uses the same version). Dependencies are locked in `package-lock.json`; use `npm ci` for a reproducible install. Node 22 ships npm 10, which does not apply the `undici` override in this lockfile and fails `npm ci` with a "lock file out of sync" error.
 
 ```powershell
 npm ci
@@ -57,7 +57,7 @@ FirstRole targets **Cloudflare Workers/Workflows and Supabase free plans** and a
 2. Create an ignored `.dev.vars` file for local Worker configuration. Set corresponding configuration and secrets on the deployed Worker. Use the variable reference below.
 3. Configure Google OAuth using [accounts and saved workspaces](docs/accounts.md). Leave Google sign-in disabled until the real provider and redirect setup is verified. Guest access does not require Google configuration.
 4. Authenticate Cloudflare using Microsoft Edge. If a command supplies an authorization URL, open it in Edge. The checked-in Wrangler configuration declares the static assets, API Worker, and three durable Workflows.
-5. After the configuration and free-plan checks, run `npm run deploy`. Set the resulting HTTPS origin as `APP_ORIGIN` and allow its exact sign-in return URL in Supabase. Run the deployed acceptance checks before publishing a demo link.
+5. After the configuration and free-plan checks, run `npm run deploy`. To deploy from GitHub instead, add `CLOUDFLARE_API_TOKEN` (Workers Scripts: Edit) and `CLOUDFLARE_ACCOUNT_ID` as repository secrets; the `deploy` job in `.github/workflows/check.yml` then publishes every push to `main` that passes the checks. Set the resulting HTTPS origin as `APP_ORIGIN` and allow its exact sign-in return URL in Supabase. Run the deployed acceptance checks before publishing a demo link.
 6. Verify the provider's maximum execution exposure and remaining allowance before enabling live search. The server verifies account-specific TinyFish rates through the documented wallet metadata endpoint and refreshes its private proof when the six-hour cache expires. Missing or increased rates pause new paid work; no daily configuration change or redeployment is required.
 
 Use an ignored `.dev.vars` file with these names; replace placeholders locally:

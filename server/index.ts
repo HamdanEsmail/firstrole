@@ -400,6 +400,17 @@ export default {
       throw new AppError('NOT_FOUND', 'This request could not be found.', 404);
     } catch (error) {
       const known = error instanceof AppError;
+      if (!known) {
+        // Unexpected failures are returned as a generic 503. Log enough to
+        // diagnose them in Workers observability without echoing request
+        // bodies, cookies, or provider credentials.
+        console.error('firstrole_request_failed', {
+          method: request.method,
+          path: url.pathname,
+          errorType: error instanceof Error ? error.name : typeof error,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       return json(
         {
           error: {
